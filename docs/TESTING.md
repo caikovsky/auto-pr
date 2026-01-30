@@ -298,7 +298,7 @@ class TestCLI:
         result = runner.invoke(app, ["--version"])
         
         assert result.exit_code == 0
-        assert "auto-pr" in result.stdout
+        assert "autopr" in result.stdout
     
     @patch("auto_pr.cli.app.create_use_case")
     def test_dry_run_does_not_create_pr(self, mock_create):

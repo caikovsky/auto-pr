@@ -1,4 +1,4 @@
-"""CLI entry point for auto-pr."""
+"""CLI entry point for autopr."""
 
 from pathlib import Path
 from typing import Annotated

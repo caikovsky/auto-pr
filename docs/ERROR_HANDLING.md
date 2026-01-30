@@ -20,7 +20,7 @@ We use **custom exceptions** (not Result types) because:
 # auto_pr/domain/exceptions.py
 
 class AutoPRError(Exception):
-    """Base exception for all auto-pr errors."""
+    """Base exception for all autopr errors."""
     
     def __init__(self, message: str, hint: str | None = None):
         super().__init__(message)

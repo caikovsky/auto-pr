@@ -2,7 +2,7 @@
 
 
 class AutoPRError(Exception):
-    """Base exception for all auto-pr errors."""
+    """Base exception for all autopr errors."""
 
     def __init__(self, message: str, hint: str | None = None) -> None:
         super().__init__(message)

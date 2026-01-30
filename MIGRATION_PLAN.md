@@ -22,7 +22,7 @@
 
 ## Overview
 
-Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN architecture principles.
+Migrate `autopr` from a bash script to a Python CLI application using CLEAN architecture principles.
 
 ### Goals
 
@@ -71,15 +71,15 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 |----------|----------|
 | Project name | `autopr` (no hyphen for pip compatibility) |
 | Source layout | Flat `auto_pr/` |
-| CLI command | `auto-pr` (hyphen for user-facing command) |
+| CLI command | `autopr` (same as package name) |
 
 ### Acceptance Criteria
 
 ```bash
 # Should work after Phase 1
 pipx install .
-auto-pr --help
-auto-pr --version
+autopr --help
+autopr --version
 ```
 
 ---
@@ -266,11 +266,11 @@ auto_pr/
 
 ```bash
 # All these should work identically to bash version
-auto-pr --help
-auto-pr --gemini --dry-run
-auto-pr --copilot --draft
-auto-pr --agent --base develop
-auto-pr --test ./results
+autopr --help
+autopr --gemini --dry-run
+autopr --copilot --draft
+autopr --agent --base develop
+autopr --test ./results
 ```
 
 ---

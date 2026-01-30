@@ -22,9 +22,9 @@
 ## What's Working
 
 ```bash
-uv run auto-pr --help           # Full CLI
-uv run auto-pr --dry-run        # Generate without creating PR
-uv run auto-pr --test           # Compare AI providers
+uv run autopr --help           # Full CLI
+uv run autopr --dry-run        # Generate without creating PR
+uv run autopr --test           # Compare AI providers
 ```
 
 ## Next Action
@@ -39,7 +39,7 @@ uv run auto-pr --test           # Compare AI providers
 
 ```bash
 cd /Users/caique-maurano/Script/automate-pr
-uv run auto-pr --help
+uv run autopr --help
 ```
 
 ## Branch

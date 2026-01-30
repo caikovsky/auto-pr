@@ -60,7 +60,7 @@ def save_default_config() -> Path:
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    default_config = """# auto-pr configuration
+    default_config = """# autopr configuration
 # AI provider: auto, gemini, copilot, or agent
 ai_provider = "auto"
 
