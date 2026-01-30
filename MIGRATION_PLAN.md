@@ -27,9 +27,17 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 | Python | 3.12+ |
 | Package Manager | uv |
 | CLI Framework | Typer |
+| Data Validation | Pydantic (frozen models) |
 | Testing | pytest |
-| Type Checking | mypy |
+| Type Checking | mypy (strict mode) |
 | Linting | ruff |
+
+### Design Principles
+
+- **Type-safe**: Full type hints, mypy strict mode, no `Any` types
+- **Immutable data**: All entities are frozen (read-only after creation)
+- **Read-only Jira**: Only fetch data, never modify remote
+- **CLEAN architecture**: Domain has no external dependencies
 
 ---
 
@@ -43,10 +51,13 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 - [ ] 1.4 Create basic CLI entry point
 - [ ] 1.5 Verify `pipx install .` works
 
-### Questions to Resolve
+### Decisions
 
-1. **Project name**: Keep `auto-pr` or rename to `autopr`? (pip doesn't like hyphens in package names)
-2. **Source layout**: `src/auto_pr/` or flat `auto_pr/`?
+| Question | Decision |
+|----------|----------|
+| Project name | `autopr` (no hyphen for pip compatibility) |
+| Source layout | Flat `auto_pr/` |
+| CLI command | `auto-pr` (hyphen for user-facing command) |
 
 ### Acceptance Criteria
 
@@ -69,16 +80,44 @@ auto_pr/
     ├── __init__.py
     ├── entities/
     │   ├── __init__.py
-    │   ├── jira_ticket.py      # JiraTicket dataclass
-    │   ├── git_context.py      # GitContext dataclass
-    │   ├── pr_description.py   # PRDescription dataclass
-    │   └── ai_result.py        # AIResult dataclass
+    │   ├── jira_ticket.py      # JiraTicket (Pydantic, frozen)
+    │   ├── git_context.py      # GitContext (Pydantic, frozen)
+    │   ├── pr_description.py   # PRDescription (Pydantic, frozen)
+    │   └── ai_result.py        # AIResult (Pydantic, frozen)
     └── interfaces/
         ├── __init__.py
         ├── ai_provider.py      # Abstract AIProvider
-        ├── jira_client.py      # Abstract JiraClient
-        ├── git_client.py       # Abstract GitClient
+        ├── jira_client.py      # Abstract JiraClient (read-only)
+        ├── git_client.py       # Abstract GitClient (read-only)
         └── pr_client.py        # Abstract PRClient (GitHub)
+```
+
+### Example Entity (Pydantic Frozen Model)
+
+```python
+from pydantic import BaseModel, Field, ConfigDict
+
+class JiraTicket(BaseModel):
+    """Jira ticket data (read-only)."""
+    
+    model_config = ConfigDict(frozen=True)  # Immutable
+    
+    key: str = Field(pattern=r'^[A-Z]+-\d+$')
+    title: str
+    description: str
+    ticket_type: str
+    url: str
+    
+    @classmethod
+    def from_acli_response(cls, data: dict) -> "JiraTicket":
+        """Parse from acli JSON response."""
+        return cls(
+            key=data["key"],
+            title=data["fields"]["summary"],
+            description=cls._extract_description(data["fields"]["description"]),
+            ticket_type=data["fields"]["issuetype"]["name"],
+            url=f"https://..."
+        )
 ```
 
 ### Tasks
@@ -92,14 +131,17 @@ auto_pr/
 - [ ] 2.7 Define `GitClient` interface
 - [ ] 2.8 Define `PRClient` interface
 
-### Questions to Resolve
+### Decisions
 
-1. Should entities be immutable (`frozen=True` dataclasses)?
-2. Use `dataclasses` or `pydantic` for validation?
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Immutability | `frozen=True` (Pydantic) | All data is read-only, especially Jira |
+| Data library | Pydantic | Type-safe validation, JSON parsing, frozen support |
 
 ### Acceptance Criteria
 
-- All entities have type hints
+- All entities use Pydantic with `frozen=True`
+- All entities have strict type hints
 - All interfaces are abstract (ABC)
 - No external dependencies in domain layer
 - 100% test coverage for entities
