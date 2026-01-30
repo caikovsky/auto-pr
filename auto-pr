@@ -71,7 +71,6 @@ check_prerequisites() {
     if ! acli auth status &> /dev/null 2>&1; then
         log_error "Atlassian CLI is not authenticated."
         log_info "Run: acli auth login"
-        log_info "See setup instructions with: auto-pr --setup-help"
         exit 1
     fi
 }
@@ -97,9 +96,6 @@ brew install atlassian-labs/tap/acli
 ```bash
 gh auth login
 ```
-- Select GitHub.com
-- Choose HTTPS
-- Authenticate with browser
 
 ## 3. Configure Atlassian CLI
 
@@ -107,30 +103,19 @@ gh auth login
 acli auth login
 ```
 
-This will open a browser window for OAuth authentication.
-Log in with your Atlassian account and authorize the CLI.
-
 ## 4. Verify Setup
 
 ```bash
-# Test Atlassian CLI
-acli auth status                        # Shows authenticated accounts
-acli jira workitem view PROJ-123        # View a ticket
-
-# Test GitHub CLI
-gh auth status                          # Shows authentication status
+acli auth status
+acli jira workitem view PROJ-123
+gh auth status
 ```
 
 ## 5. Add auto-pr to PATH
 
 Add to ~/.zshrc:
 ```bash
-export PATH="$PATH:/Users/caique-maurano/Script/automate-pr"
-```
-
-Then reload:
-```bash
-source ~/.zshrc
+export PATH="$PATH:/path/to/automate-pr"
 ```
 
 ## Usage
@@ -138,17 +123,8 @@ source ~/.zshrc
 ```bash
 cd /path/to/your/repo
 git checkout task/TLAB-2023
-auto-pr
-```
-
-## ACLI Quick Reference
-
-```bash
-acli auth login                         # Authenticate via OAuth
-acli auth status                        # Check auth status
-acli auth logout                        # Logout
-acli jira workitem view KEY-123         # View ticket
-acli jira workitem view KEY-123 --json  # View ticket as JSON
+auto-pr --dry-run    # Preview
+auto-pr              # Create PR
 ```
 
 EOF
@@ -160,8 +136,6 @@ EOF
 
 extract_jira_ticket() {
     local branch_name="$1"
-    # Match common Jira ticket patterns: PROJECT-123
-    # Handles branches like: task/TLAB-2023, feature/PROJ-123-description, bugfix/ABC-456
     echo "$branch_name" | grep -oE '[A-Z]+-[0-9]+' | head -1
 }
 
@@ -174,14 +148,12 @@ fetch_jira_ticket_json() {
     
     log_info "Fetching Jira ticket: $ticket"
     
-    # Get ticket details in JSON format using acli
     local response
     response=$(acli jira workitem view "$ticket" --json 2>&1)
     local exit_code=$?
     
-    if [[ $exit_code -ne 0 ]] || echo "$response" | grep -qi "error\|not found\|does not exist"; then
+    if [[ $exit_code -ne 0 ]] || echo "$response" | grep -qi '"error"\|not found\|does not exist'; then
         log_error "Failed to fetch Jira ticket: $ticket"
-        log_info "Error: $response"
         return 1
     fi
     
@@ -189,7 +161,7 @@ fetch_jira_ticket_json() {
 }
 
 #######################################
-# Parse Jira Ticket Data from ACLI JSON
+# Parse Jira Ticket Data
 #######################################
 
 get_ticket_title() {
@@ -199,14 +171,23 @@ get_ticket_title() {
 
 get_ticket_description() {
     local json_data="$1"
-    # ACLI returns description in Atlassian Document Format, extract text content
     local desc
     desc=$(echo "$json_data" | jq -r '
-        [.fields.description.content[]?.content[]?.text // empty] | join(" ")
-    ' 2>/dev/null)
+        def extract_text:
+            if type == "object" then
+                if .text then .text
+                elif .content then (.content | map(extract_text) | join(" "))
+                else ""
+                end
+            elif type == "array" then
+                map(extract_text) | join(" ")
+            else ""
+            end;
+        .fields.description | extract_text
+    ' 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')
     
-    if [[ -z "$desc" || "$desc" == "null" ]]; then
-        desc="No description available"
+    if [[ -z "$desc" || "$desc" == "null" || "$desc" == " " ]]; then
+        desc=""
     fi
     
     echo "$desc"
@@ -225,7 +206,6 @@ get_ticket_status() {
 get_ticket_url() {
     local ticket="$1"
     
-    # Get site from auth status
     local site
     site=$(acli auth status 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.atlassian\.net' | head -1)
     
@@ -237,6 +217,78 @@ get_ticket_url() {
 }
 
 #######################################
+# Git Information Functions
+#######################################
+
+get_base_branch() {
+    local base="$1"
+    
+    if git rev-parse --verify "$base" &>/dev/null; then
+        echo "$base"
+    elif git rev-parse --verify "origin/$base" &>/dev/null; then
+        echo "origin/$base"
+    elif git rev-parse --verify "origin/main" &>/dev/null; then
+        echo "origin/main"
+    elif git rev-parse --verify "origin/master" &>/dev/null; then
+        echo "origin/master"
+    else
+        echo ""
+    fi
+}
+
+get_commit_messages() {
+    local base_branch="$1"
+    
+    if [[ -z "$base_branch" ]]; then
+        git log --oneline -10 --pretty=format:"- %s" 2>/dev/null
+    else
+        git log "${base_branch}..HEAD" --oneline --pretty=format:"- %s" 2>/dev/null
+    fi
+}
+
+get_changed_files() {
+    local base_branch="$1"
+    
+    if [[ -z "$base_branch" ]]; then
+        git diff --name-only HEAD~1 2>/dev/null || git ls-files 2>/dev/null
+    else
+        git diff --name-only "${base_branch}..HEAD" 2>/dev/null
+    fi
+}
+
+get_diff_stat() {
+    local base_branch="$1"
+    
+    if [[ -z "$base_branch" ]]; then
+        git diff --stat HEAD~1 2>/dev/null
+    else
+        git diff --stat "${base_branch}..HEAD" 2>/dev/null
+    fi
+}
+
+get_impacted_areas() {
+    local changed_files="$1"
+    
+    if [[ -z "$changed_files" ]]; then
+        echo "- No files changed"
+        return
+    fi
+    
+    echo "$changed_files" | while read -r file; do
+        if [[ -n "$file" ]]; then
+            local dir=$(dirname "$file" | cut -d'/' -f1-2)
+            if [[ "$dir" == "." ]]; then
+                echo "Root"
+            else
+                echo "$dir"
+            fi
+        fi
+    done | sort -u | head -10 | while read -r area; do
+        echo "- \`$area\`"
+    done
+}
+
+#######################################
 # Find PR Template
 #######################################
 
@@ -245,18 +297,15 @@ find_pr_template() {
     repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
     
     if [[ -z "$repo_root" ]]; then
-        log_error "Not in a git repository"
         return 1
     fi
     
-    # Common PR template locations
     local template_paths=(
         ".github/PULL_REQUEST_TEMPLATE.md"
         ".github/pull_request_template.md"
         ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"
         "docs/PULL_REQUEST_TEMPLATE.md"
         "PULL_REQUEST_TEMPLATE.md"
-        "pull_request_template.md"
     )
     
     for path in "${template_paths[@]}"; do
@@ -272,59 +321,137 @@ find_pr_template() {
 }
 
 #######################################
-# Fill PR Template
+# Generate PR Description
 #######################################
 
-fill_pr_template() {
+generate_pr_description() {
     local template_path="$1"
     local ticket="$2"
-    local ticket_title="$3"
+    local ticket_url="$3"
     local ticket_description="$4"
-    local ticket_url="$5"
-    local ticket_type="$6"
+    local ticket_type="$5"
+    local commit_messages="$6"
+    local changed_files="$7"
+    local diff_stat="$8"
     
-    local template_content=""
-    
+    # Read template or use default
+    local template=""
     if [[ -n "$template_path" && -f "$template_path" ]]; then
-        template_content=$(cat "$template_path")
+        template=$(cat "$template_path")
     else
-        # Default template if none found
-        template_content="## Description
-<!-- Describe your changes -->
+        template="## Description
+
+<!-- Description will be filled automatically -->
 
 ## Jira Ticket
-<!-- Link to Jira ticket -->
 
-## Type of Change
-<!-- What type of change is this? -->
+<!-- Jira link -->
 
-## Testing
-<!-- How was this tested? -->
+## Impacted Areas
+
+<!-- Areas affected -->
 
 ## Checklist
-- [ ] Code follows project style guidelines
 - [ ] Self-review completed
-- [ ] Tests added/updated
-- [ ] Documentation updated if needed"
+- [ ] Tests added/updated"
     fi
     
-    # Use awk to replace patterns (more robust than sed for this use case)
-    # Replace placeholder Jira URLs like https://xxx.atlassian.net/browse/JIRA-0000
-    template_content=$(echo "$template_content" | awk -v url="$ticket_url" '{
-        gsub(/https:\/\/[a-zA-Z0-9.-]+\.atlassian\.net\/browse\/[A-Z]+-[0-9]+/, url)
-        print
-    }')
+    # Build description content
+    local description_parts=""
     
-    # Replace common placeholders
-    template_content=$(echo "$template_content" | awk -v url="$ticket_url" '{
-        gsub(/<!-- Link to Jira ticket -->/, url)
-        gsub(/\[JIRA_LINK\]/, url)
-        gsub(/\{JIRA_LINK\}/, url)
-        gsub(/JIRA_TICKET_URL/, url)
-        print
-    }')
+    if [[ -n "$ticket_description" ]]; then
+        description_parts="**Jira Description:** $ticket_description"
+    fi
     
-    echo "$template_content"
+    if [[ -n "$commit_messages" ]]; then
+        if [[ -n "$description_parts" ]]; then
+            description_parts="$description_parts
+
+**Commits:**
+$commit_messages"
+        else
+            description_parts="**Commits:**
+$commit_messages"
+        fi
+    fi
+    
+    # Build impacted areas
+    local impacted_areas=""
+    if [[ -n "$changed_files" ]]; then
+        impacted_areas=$(get_impacted_areas "$changed_files")
+    fi
+    
+    # Process template line by line
+    local output=""
+    local in_section=""
+    local section_filled=false
+    local prev_was_header=false
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Check if this is a section header
+        if [[ "$line" =~ ^##\  ]]; then
+            in_section="$line"
+            section_filled=false
+            prev_was_header=true
+            output+="$line"$'\n'
+            continue
+        fi
+        
+        # Check if this is an HTML comment (placeholder) or empty line after header
+        local is_placeholder=false
+        if [[ "$line" =~ ^[[:space:]]*\<!--.*--\>$ ]]; then
+            is_placeholder=true
+        fi
+        
+        # Skip placeholder comments if section was already filled
+        if [[ "$is_placeholder" == true ]] && [[ "$section_filled" == true ]]; then
+            continue
+        fi
+        
+        # Fill section content
+        if [[ "$section_filled" == false ]] && { [[ "$is_placeholder" == true ]] || { [[ "$prev_was_header" == true ]] && [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]]; }; }; then
+            prev_was_header=false
+            
+            case "$in_section" in
+                *"JIRA"*|*"Jira Ticket"*)
+                    output+="$ticket_url"$'\n'
+                    section_filled=true
+                    continue
+                    ;;
+                *"Description"*|*"Added in this PR"*)
+                    if [[ -n "$description_parts" ]]; then
+                        output+="$description_parts"$'\n'
+                        section_filled=true
+                        continue
+                    fi
+                    ;;
+                *"Impacted Areas"*)
+                    if [[ -n "$impacted_areas" ]]; then
+                        output+="$impacted_areas"$'\n'
+                        section_filled=true
+                        continue
+                    fi
+                    ;;
+                *"Type of Change"*)
+                    output+="$ticket_type"$'\n'
+                    section_filled=true
+                    continue
+                    ;;
+            esac
+        fi
+        
+        prev_was_header=false
+        
+        # Check for placeholder Jira URLs and replace them
+        if [[ "$line" =~ https://[a-zA-Z0-9.-]+\.atlassian\.net/browse/[A-Z]+-[0-9]+ ]]; then
+            line=$(echo "$line" | sed -E "s|https://[a-zA-Z0-9.-]+\.atlassian\.net/browse/[A-Z]+-[0-9]+|$ticket_url|g")
+        fi
+        
+        output+="$line"$'\n'
+    done <<< "$template"
+    
+    # Remove trailing newline
+    echo "${output%$'\n'}"
 }
 
 #######################################
@@ -339,15 +466,9 @@ create_pr() {
     
     log_info "Creating pull request..."
     
-    local draft_flag=""
-    if [[ "$draft" == "true" ]]; then
-        draft_flag="--draft"
-    fi
-    
-    # Create the PR using gh CLI
     local pr_url
-    if [[ -n "$draft_flag" ]]; then
-        pr_url=$(gh pr create --title "$title" --body "$body" --base "$base_branch" $draft_flag 2>&1)
+    if [[ "$draft" == "true" ]]; then
+        pr_url=$(gh pr create --title "$title" --body "$body" --base "$base_branch" --draft 2>&1)
     else
         pr_url=$(gh pr create --title "$title" --body "$body" --base "$base_branch" 2>&1)
     fi
@@ -370,7 +491,6 @@ main() {
     local base_branch="main"
     local dry_run="false"
     
-    # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             --setup-help|--setup)
@@ -392,14 +512,12 @@ main() {
             --help|-h)
                 echo "Usage: auto-pr [OPTIONS]"
                 echo ""
-                echo "Automatically create GitHub PRs with Atlassian CLI integration"
-                echo ""
                 echo "Options:"
-                echo "  --setup-help  Show setup instructions for Atlassian CLI"
+                echo "  --setup-help  Show setup instructions"
                 echo "  --draft, -d   Create PR as draft"
                 echo "  --base, -b    Specify base branch (default: main)"
-                echo "  --dry-run     Preview PR without creating it"
-                echo "  --help, -h    Show this help message"
+                echo "  --dry-run     Preview PR without creating"
+                echo "  --help, -h    Show this help"
                 exit 0
                 ;;
             *)
@@ -409,10 +527,8 @@ main() {
         esac
     done
     
-    # Check all prerequisites
     check_prerequisites
     
-    # Get current branch
     local current_branch
     current_branch=$(git branch --show-current)
     
@@ -422,18 +538,16 @@ main() {
     
     log_info "Current branch: $current_branch"
     
-    # Extract Jira ticket from branch name
     local ticket
     ticket=$(extract_jira_ticket "$current_branch")
     
     if [[ -z "$ticket" ]]; then
-        die "Could not extract Jira ticket from branch name: $current_branch
+        die "Could not extract Jira ticket from branch: $current_branch
 Expected format: task/PROJ-123 or feature/PROJ-123-description"
     fi
     
     log_success "Found Jira ticket: $ticket"
     
-    # Fetch Jira ticket details using ACLI
     local jira_json
     jira_json=$(fetch_jira_ticket_json "$ticket")
     
@@ -441,7 +555,6 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
         die "Failed to fetch Jira ticket details"
     fi
     
-    # Parse ticket information
     local ticket_title ticket_description ticket_type ticket_status ticket_url
     ticket_title=$(get_ticket_title "$jira_json")
     ticket_description=$(get_ticket_description "$jira_json")
@@ -453,14 +566,45 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
     log_info "Ticket type: $ticket_type"
     log_info "Ticket status: $ticket_status"
     
-    # Find and fill PR template
+    local resolved_base
+    resolved_base=$(get_base_branch "$base_branch")
+    
+    log_info "Analyzing commits and changes..."
+    
+    local commit_messages changed_files diff_stat
+    commit_messages=$(get_commit_messages "$resolved_base")
+    changed_files=$(get_changed_files "$resolved_base")
+    diff_stat=$(get_diff_stat "$resolved_base")
+    
+    local commit_count file_count
+    if [[ -n "$commit_messages" ]]; then
+        commit_count=$(echo "$commit_messages" | grep -c "^-" 2>/dev/null || echo "0")
+    else
+        commit_count=0
+    fi
+    
+    if [[ -n "$changed_files" ]]; then
+        file_count=$(echo "$changed_files" | wc -l | tr -d ' ')
+    else
+        file_count=0
+    fi
+    
+    log_info "Found $commit_count commit(s) and $file_count changed file(s)"
+    
     local template_path
     template_path=$(find_pr_template)
     
     local pr_body
-    pr_body=$(fill_pr_template "$template_path" "$ticket" "$ticket_title" "$ticket_description" "$ticket_url" "$ticket_type")
+    pr_body=$(generate_pr_description \
+        "$template_path" \
+        "$ticket" \
+        "$ticket_url" \
+        "$ticket_description" \
+        "$ticket_type" \
+        "$commit_messages" \
+        "$changed_files" \
+        "$diff_stat")
     
-    # Build PR title: [JIRA-XXX] - Task Title
     local pr_title="[${ticket}] - ${ticket_title}"
     
     echo ""
@@ -478,16 +622,13 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
         exit 0
     fi
     
-    # Confirm creation
     read -p "Create this PR? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         log_info "PR creation cancelled"
         exit 0
     fi
     
-    # Create the PR
     create_pr "$pr_title" "$pr_body" "$base_branch" "$draft"
 }
 
-# Run main
 main "$@"
