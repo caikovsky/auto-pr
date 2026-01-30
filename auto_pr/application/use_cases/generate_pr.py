@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from auto_pr.domain.entities import GitContext, JiraTicket, PRDescription
-from auto_pr.domain.exceptions import BranchParseError
 from auto_pr.domain.interfaces import AIProvider, GitClient, JiraClient, PRClient
 from auto_pr.application.services.prompt_builder import PromptBuilder
 
@@ -45,19 +44,20 @@ class GeneratePRDescription:
             GeneratePRResult with title, description, ticket, and context.
 
         Raises:
-            BranchParseError: If ticket cannot be extracted from branch.
-            JiraTicketNotFoundError: If ticket doesn't exist.
+            JiraTicketNotFoundError: If ticket key found but doesn't exist.
             AIGenerationError: If AI fails to generate.
         """
         # Get git context
         context = self._git.get_context(base_branch)
 
-        # Extract and fetch Jira ticket
+        # Extract and fetch Jira ticket (optional)
+        ticket: JiraTicket | None = None
         ticket_key = self._git.extract_ticket_key(context.branch)
-        if not ticket_key:
-            raise BranchParseError(context.branch)
-
-        ticket = self._jira.fetch(ticket_key)
+        if ticket_key:
+            try:
+                ticket = self._jira.fetch(ticket_key)
+            except Exception:
+                pass  # Continue without ticket if fetch fails
 
         # Get PR template
         template = self._pr.get_pr_template()
@@ -67,7 +67,12 @@ class GeneratePRDescription:
         description = self._ai.generate(prompt)
 
         # Build title
-        title = f"[{ticket.key}] {ticket.title}"
+        if ticket:
+            title = f"[{ticket.key}] {ticket.title}"
+        else:
+            # Use branch name as title
+            branch_title = context.branch.replace("/", ": ").replace("-", " ").title()
+            title = branch_title
 
         return GeneratePRResult(
             title=title,
