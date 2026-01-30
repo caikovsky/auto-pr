@@ -18,6 +18,8 @@ auto-pr
 auto-pr --dry-run
 ```
 
+> **Note**: Package name is `autopr`, CLI command is `auto-pr`.
+
 ## Features
 
 - **AI-Powered Descriptions**: Uses Gemini, GitHub Copilot, or Cursor Agent to generate insightful PR descriptions
@@ -48,7 +50,7 @@ This makes `auto-pr` available from anywhere in your terminal.
 brew install pipx
 pipx ensurepath
 
-# Install auto-pr globally
+# Install from GitHub (package name: autopr, CLI command: auto-pr)
 pipx install git+https://github.com/caikovsky/auto-pr.git
 
 # Verify it works
@@ -58,7 +60,7 @@ auto-pr --help
 #### Option 2: Using uv tool
 
 ```bash
-# Install globally with uv
+# Install from GitHub
 uv tool install git+https://github.com/caikovsky/auto-pr.git
 
 # Verify it works
@@ -197,24 +199,24 @@ See `docs/` for detailed architecture and style guidelines.
 ## Updating
 
 ```bash
-# If installed with pipx
-pipx upgrade auto-pr
+# If installed with pipx (package name is "autopr")
+pipx upgrade autopr
 
-# Or reinstall
+# Or reinstall from latest
 pipx install --force git+https://github.com/caikovsky/auto-pr.git
 
 # If installed with uv tool
-uv tool upgrade auto-pr
+uv tool upgrade autopr
 ```
 
 ## Uninstall
 
 ```bash
 # If installed with pipx
-pipx uninstall auto-pr
+pipx uninstall autopr
 
 # If installed with uv tool
-uv tool uninstall auto-pr
+uv tool uninstall autopr
 ```
 
 ## Development
