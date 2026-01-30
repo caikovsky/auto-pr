@@ -28,6 +28,7 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 | Package Manager | uv |
 | CLI Framework | Typer |
 | Data Validation | Pydantic (frozen models) |
+| Output Formatting | Rich |
 | Testing | pytest |
 | Type Checking | mypy (strict mode) |
 | Linting | ruff |
@@ -183,11 +184,13 @@ auto_pr/
 - [ ] 3.6 Implement `GhPRClient` (create PR via gh)
 - [ ] 3.7 Add subprocess wrapper with error handling
 
-### Questions to Resolve
+### Decisions
 
-1. Use `subprocess` directly or a wrapper library?
-2. Async or sync execution for CLI calls?
-3. How to handle CLI tool not installed errors?
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Subprocess handling | Direct `subprocess.run` with thin wrapper | Simple, no extra deps |
+| Sync vs Async | Sync | CLI tools are blocking anyway |
+| Missing CLI errors | Custom `ToolNotFoundError` exception | See `docs/ERROR_HANDLING.md` |
 
 ### Acceptance Criteria
 
@@ -224,16 +227,19 @@ auto_pr/
 - [ ] 4.4 Implement `CompareAIOutputs` use case
 - [ ] 4.5 Implement `CreatePullRequest` use case
 
-### Questions to Resolve
+### Decisions
 
-1. Should use cases return `Result[T, Error]` or raise exceptions?
-2. How to handle partial failures in comparison mode?
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Error handling | Custom exceptions | More Pythonic, simpler. See `docs/ERROR_HANDLING.md` |
+| Partial failures | Collect results, report failures | Don't fail entire comparison for one provider |
 
 ### Acceptance Criteria
 
 - Use cases are testable with mocked dependencies
 - No direct infrastructure imports (dependency injection)
 - Clear separation between orchestration and business logic
+- Exceptions propagate to CLI layer
 
 ---
 
@@ -269,11 +275,13 @@ auto_pr/
 - [ ] 5.7 Add Rich console output (colors, progress)
 - [ ] 5.8 Add shell completion support
 
-### Questions to Resolve
+### Decisions
 
-1. Use Rich for output formatting?
-2. Add `--verbose` / `--quiet` flags?
-3. Add `--version` flag?
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Output formatting | Yes, use Rich | Beautiful output, progress bars, Typer integration |
+| Verbosity flags | `--verbose` only (no quiet) | Keep simple, verbose for debugging |
+| Version flag | Yes, `--version` | Standard CLI practice |
 
 ### Acceptance Criteria
 
@@ -306,10 +314,13 @@ auto_pr/
 - [ ] 6.2 Implement simple DI container
 - [ ] 6.3 Wire up all dependencies
 
-### Questions to Resolve
+### Decisions
 
-1. Use a DI library (dependency-injector) or manual wiring?
-2. Config file format: TOML, YAML, or just env vars?
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| DI approach | Manual wiring | Simple, no magic. See `docs/ARCHITECTURE.md` |
+| Config format | TOML | Python standard, matches pyproject.toml |
+| Config location | `~/.config/autopr/config.toml` | XDG standard |
 
 ---
 
@@ -384,13 +395,22 @@ tests/
 
 ---
 
+## Documentation
+
+Reference these guides during implementation:
+
+| Document | Purpose |
+|----------|---------|
+| `docs/ARCHITECTURE.md` | CLEAN architecture layers, dependency rules |
+| `docs/ERROR_HANDLING.md` | Exception hierarchy, where to raise/catch |
+| `docs/TESTING.md` | Test structure, coverage requirements |
+| `docs/STYLE_GUIDE.md` | Type hints, naming, code style |
+
 ## Open Questions
 
 > Add questions here as they come up during implementation
 
-1. 
-2. 
-3. 
+_(None currently - all resolved)_
 
 ---
 
