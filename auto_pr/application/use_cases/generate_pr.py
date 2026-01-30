@@ -15,6 +15,7 @@ class GeneratePRResult:
     description: PRDescription
     ticket: JiraTicket | None
     context: GitContext
+    ticket_error: str | None = None  # Warning if ticket fetch failed
 
 
 class GeneratePRDescription:
@@ -52,12 +53,14 @@ class GeneratePRDescription:
 
         # Extract and fetch Jira ticket (optional)
         ticket: JiraTicket | None = None
+        ticket_error: str | None = None
         ticket_key = self._git.extract_ticket_key(context.branch)
         if ticket_key:
             try:
                 ticket = self._jira.fetch(ticket_key)
-            except Exception:
-                pass  # Continue without ticket if fetch fails
+            except Exception as e:
+                # Continue without ticket, but record the error for warning
+                ticket_error = f"Could not fetch {ticket_key}: {e}"
 
         # Get PR template
         template = self._pr.get_pr_template()
@@ -79,4 +82,5 @@ class GeneratePRDescription:
             description=description,
             ticket=ticket,
             context=context,
+            ticket_error=ticket_error,
         )

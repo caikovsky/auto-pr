@@ -127,7 +127,13 @@ def _run_generate(
         console.print(Panel(preview, title="PR Description Preview"))
 
     console.print()
-    console.print(f"[dim]Ticket:[/dim] {result.ticket.key if result.ticket else 'N/A'}")
+    if result.ticket:
+        console.print(f"[dim]Ticket:[/dim] {result.ticket.key}")
+    elif result.ticket_error:
+        console.print(f"[yellow]Warning:[/yellow] {result.ticket_error}")
+        console.print(f"[dim]Ticket:[/dim] N/A (continuing without ticket)")
+    else:
+        console.print(f"[dim]Ticket:[/dim] N/A (no ticket in branch name)")
     console.print(f"[dim]Commits:[/dim] {result.context.commit_count}")
     console.print(f"[dim]Files:[/dim] {result.context.file_count}")
 
