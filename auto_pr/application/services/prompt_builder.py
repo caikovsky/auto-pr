@@ -1,9 +1,5 @@
 """Prompt builder service for AI generation."""
 
-from auto_pr.config.settings import (
-    DEFAULT_OUTPUT_RULES,
-    DEFAULT_PROMPT_INSTRUCTIONS,
-)
 from auto_pr.domain.entities import GitContext, JiraTicket
 
 
@@ -12,14 +8,14 @@ class PromptBuilder:
 
     def __init__(
         self,
-        prompt_instructions: str = DEFAULT_PROMPT_INSTRUCTIONS,
-        output_rules: str = DEFAULT_OUTPUT_RULES,
+        prompt_instructions: str,
+        output_rules: str,
     ) -> None:
-        """Initialize with customizable instructions.
+        """Initialize with instructions from config.
 
         Args:
-            prompt_instructions: What the AI should focus on.
-            output_rules: Formatting requirements for output.
+            prompt_instructions: What the AI should focus on (from config).
+            output_rules: Formatting requirements for output (from config).
         """
         self._prompt_instructions = prompt_instructions
         self._output_rules = output_rules
