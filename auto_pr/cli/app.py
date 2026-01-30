@@ -47,6 +47,8 @@ def main(
     gemini: Annotated[bool, typer.Option("--gemini", help="Use Gemini AI")] = False,
     copilot: Annotated[bool, typer.Option("--copilot", help="Use GitHub Copilot")] = False,
     agent: Annotated[bool, typer.Option("--agent", help="Use Cursor Agent")] = False,
+    update: Annotated[bool, typer.Option("--update", "-u", help="Update existing PR (skip prompt)")] = False,
+    new: Annotated[bool, typer.Option("--new", help="Create new PR (skip prompt)")] = False,
     test: Annotated[bool, typer.Option("--test", help="Compare all AI providers")] = False,
     test_dir: Annotated[Path | None, typer.Option("--test-dir", help="Output directory for --test")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
@@ -68,7 +70,7 @@ def main(
             return
 
         # Normal mode
-        _run_generate(base_branch, ai_choice, dry_run, draft, verbose)
+        _run_generate(base_branch, ai_choice, dry_run, draft, update, new, verbose)
 
     except AutoPRError as e:
         console.print(f"[red]Error:[/red] {e.message}")
@@ -85,6 +87,8 @@ def _run_generate(
     ai_choice: str | None,
     dry_run: bool,
     draft: bool,
+    force_update: bool,
+    force_new: bool,
     verbose: bool,
 ) -> None:
     """Run the main PR generation flow."""
@@ -94,6 +98,10 @@ def _run_generate(
     pr_client = GhPRClient()
     ai_selector = AISelector()
     prompt_builder = PromptBuilder()
+
+    # Get current branch and check for existing PR
+    current_branch = git_client.get_current_branch()
+    existing_pr = pr_client.find_pr_for_branch(current_branch)
 
     # Get AI provider
     ai_provider = ai_selector.get_provider(ai_choice)
@@ -137,17 +145,46 @@ def _run_generate(
     console.print(f"[dim]Commits:[/dim] {result.context.commit_count}")
     console.print(f"[dim]Files:[/dim] {result.context.file_count}")
 
-    # Create PR or dry run
+    # Dry run - stop here
     if dry_run:
         console.print()
-        console.print("[yellow]Dry run mode - PR not created[/yellow]")
-    else:
-        console.print()
-        console.print("[dim]Creating PR...[/dim]")
+        console.print("[yellow]Dry run mode - PR not created/updated[/yellow]")
+        return
 
+    # Determine action: update existing or create new
+    should_update = False
+
+    if existing_pr and not force_new:
+        if force_update:
+            should_update = True
+        else:
+            # Prompt user
+            console.print()
+            console.print(f"[cyan]Found existing PR #{existing_pr.number}:[/cyan] {existing_pr.title}")
+            console.print(f"[dim]URL:[/dim] {existing_pr.url}")
+            console.print()
+            choice = typer.prompt(
+                "[U]pdate existing PR or create [N]ew?",
+                default="U",
+                show_default=True,
+            ).strip().upper()
+            should_update = choice != "N"
+
+    # Execute action
+    console.print()
+    if should_update and existing_pr:
+        console.print(f"[dim]Updating PR #{existing_pr.number}...[/dim]")
+        url = pr_client.update_pr(
+            pr_number=existing_pr.number,
+            title=result.title,
+            body=result.description.content,
+        )
+        console.print()
+        console.print(f"[green]✓ PR updated:[/green] {url}")
+    else:
+        console.print("[dim]Creating PR...[/dim]")
         create_uc = CreatePullRequest(pr_client=pr_client)
         pr_result = create_uc.execute(result, draft=draft)
-
         console.print()
         console.print(f"[green]✓ PR created:[/green] {pr_result.url}")
         if pr_result.draft:

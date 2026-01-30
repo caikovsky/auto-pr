@@ -1,6 +1,6 @@
 """Domain layer - core entities, interfaces, and exceptions."""
 
-from auto_pr.domain.entities import GitContext, JiraTicket, PRDescription
+from auto_pr.domain.entities import ExistingPR, GitContext, JiraTicket, PRDescription
 from auto_pr.domain.exceptions import (
     AIError,
     AIGenerationError,
@@ -23,6 +23,7 @@ from auto_pr.domain.interfaces import AIProvider, GitClient, JiraClient, PRClien
 
 __all__ = [
     # Entities
+    "ExistingPR",
     "GitContext",
     "JiraTicket",
     "PRDescription",

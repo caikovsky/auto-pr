@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 
+from auto_pr.domain.entities import ExistingPR
+
 
 class PRClient(ABC):
     """Interface for PR creation (GitHub)."""
@@ -12,6 +14,18 @@ class PRClient(ABC):
 
         Returns:
             Template content or None if no template exists.
+        """
+        ...
+
+    @abstractmethod
+    def find_pr_for_branch(self, branch: str) -> ExistingPR | None:
+        """Find an existing PR for the given branch.
+
+        Args:
+            branch: The head branch name.
+
+        Returns:
+            ExistingPR if found, None otherwise.
         """
         ...
 
@@ -37,5 +51,28 @@ class PRClient(ABC):
         Raises:
             GitHubAuthenticationError: If not authenticated.
             PRCreationError: If PR creation fails.
+        """
+        ...
+
+    @abstractmethod
+    def update_pr(
+        self,
+        pr_number: int,
+        title: str,
+        body: str,
+    ) -> str:
+        """Update an existing pull request.
+
+        Args:
+            pr_number: PR number to update.
+            title: New PR title.
+            body: New PR description body.
+
+        Returns:
+            URL of the updated PR.
+
+        Raises:
+            GitHubAuthenticationError: If not authenticated.
+            PRCreationError: If PR update fails.
         """
         ...

@@ -1,7 +1,9 @@
 """GitHub client using gh CLI."""
 
+import json
 from pathlib import Path
 
+from auto_pr.domain.entities import ExistingPR
 from auto_pr.domain.exceptions import (
     GitHubAuthenticationError,
     PRCreationError,
@@ -38,6 +40,35 @@ class GhPRClient(PRClient):
 
         return None
 
+    def find_pr_for_branch(self, branch: str) -> ExistingPR | None:
+        """Find an existing PR for the given branch."""
+        try:
+            result = run_command(
+                [
+                    "gh", "pr", "list",
+                    "--head", branch,
+                    "--json", "number,title,body,url,isDraft",
+                    "--limit", "1",
+                ],
+                timeout=30,
+            )
+
+            data = json.loads(result.stdout)
+            if not data:
+                return None
+
+            pr = data[0]
+            return ExistingPR(
+                number=pr["number"],
+                title=pr["title"],
+                body=pr["body"] or "",
+                url=pr["url"],
+                draft=pr.get("isDraft", False),
+            )
+
+        except (ToolExecutionError, json.JSONDecodeError):
+            return None
+
     def create_pr(
         self,
         title: str,
@@ -59,6 +90,29 @@ class GhPRClient(PRClient):
         try:
             result = run_command(args, timeout=60)
             # gh pr create outputs the PR URL
+            return result.stdout.strip()
+
+        except ToolExecutionError as e:
+            self._handle_error(e)
+            raise  # Re-raise if not handled
+
+    def update_pr(
+        self,
+        pr_number: int,
+        title: str,
+        body: str,
+    ) -> str:
+        """Update an existing pull request."""
+        try:
+            result = run_command(
+                [
+                    "gh", "pr", "edit", str(pr_number),
+                    "--title", title,
+                    "--body", body,
+                ],
+                timeout=60,
+            )
+            # gh pr edit outputs the PR URL
             return result.stdout.strip()
 
         except ToolExecutionError as e:
