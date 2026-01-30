@@ -544,6 +544,7 @@ main() {
     local dry_run="false"
     local test_mode="false"
     local test_output_dir=""
+    local force_ai_cli=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -571,20 +572,33 @@ main() {
                     shift
                 fi
                 ;;
+            --gemini)
+                force_ai_cli="gemini"
+                shift
+                ;;
+            --copilot)
+                force_ai_cli="copilot"
+                shift
+                ;;
+            --agent)
+                force_ai_cli="agent"
+                shift
+                ;;
             --help|-h)
                 echo "Usage: auto-pr [OPTIONS]"
                 echo ""
                 echo "AI-powered PR creation with Jira integration"
                 echo ""
                 echo "Options:"
-                echo "  --setup       Configure AI CLI tool"
+                echo "  --gemini      Use Google Gemini CLI"
+                echo "  --copilot     Use GitHub Copilot CLI"
+                echo "  --agent       Use Cursor Agent CLI"
                 echo "  --draft, -d   Create PR as draft"
                 echo "  --base, -b    Specify base branch (default: main)"
                 echo "  --dry-run     Preview PR without creating"
-                echo "  --test [dir]  Compare outputs from multiple AI CLIs"
+                echo "  --test [dir]  Compare outputs from all AI CLIs"
+                echo "  --setup       Configure default AI CLI"
                 echo "  --help, -h    Show this help"
-                echo ""
-                echo "Supported AI CLIs: gemini, copilot, agent"
                 exit 0
                 ;;
             *)
@@ -595,6 +609,15 @@ main() {
     done
     
     check_prerequisites
+    
+    # Override AI CLI if specified via flag
+    if [[ -n "$force_ai_cli" ]]; then
+        if ! command -v "$force_ai_cli" &>/dev/null; then
+            die "$force_ai_cli CLI is not installed"
+        fi
+        DETECTED_AI_CLI="$force_ai_cli"
+        log_info "Using AI CLI: $DETECTED_AI_CLI (via --$force_ai_cli flag)"
+    fi
     
     local current_branch
     current_branch=$(git branch --show-current)

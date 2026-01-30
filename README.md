@@ -39,20 +39,32 @@ source ~/.zshrc
 cd /path/to/your/repo
 git checkout task/TLAB-2023
 
+# Auto-detect AI CLI
 auto-pr --dry-run    # Preview AI-generated PR
 auto-pr              # Create PR
-auto-pr --draft      # Create as draft
+
+# Choose specific AI CLI
+auto-pr --gemini     # Use Gemini
+auto-pr --copilot    # Use GitHub Copilot
+auto-pr --agent      # Use Cursor Agent
+
+# Combine with other flags
+auto-pr --gemini --dry-run
+auto-pr --agent --draft
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
+| `--gemini` | Use Google Gemini CLI |
+| `--copilot` | Use GitHub Copilot CLI |
+| `--agent` | Use Cursor Agent CLI |
 | `--dry-run` | Preview PR without creating |
 | `--draft`, `-d` | Create as draft PR |
 | `--base`, `-b` | Base branch (default: main) |
-| `--test [dir]` | Compare outputs from gemini, copilot, agent |
-| `--setup` | Configure AI CLI tool |
+| `--test [dir]` | Compare outputs from all AI CLIs |
+| `--setup` | Configure default AI CLI |
 | `--help`, `-h` | Show help |
 
 ## AI Comparison Testing
