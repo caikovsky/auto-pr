@@ -2,6 +2,22 @@
 
 AI-powered Pull Request creation tool. Automatically generates PR descriptions using AI based on your Jira ticket and git changes.
 
+## Quick Start
+
+```bash
+# Install globally (one-time setup)
+pipx install git+https://github.com/caikovsky/auto-pr.git
+
+# Navigate to any git repository
+cd your-project
+
+# Create a PR with AI-generated description
+auto-pr
+
+# Or preview first
+auto-pr --dry-run
+```
+
 ## Features
 
 - **AI-Powered Descriptions**: Uses Gemini, GitHub Copilot, or Cursor Agent to generate insightful PR descriptions
@@ -21,18 +37,61 @@ AI-powered Pull Request creation tool. Automatically generates PR descriptions u
 - [GitHub CLI (gh)](https://cli.github.com/) - for PR creation
 - At least one AI CLI: `gemini`, `copilot`, or `agent`
 
-### Install
+### Install Globally (Recommended)
+
+This makes `auto-pr` available from anywhere in your terminal.
+
+#### Option 1: Using pipx (Recommended)
+
+```bash
+# Install pipx if you don't have it
+brew install pipx
+pipx ensurepath
+
+# Install auto-pr globally
+pipx install git+https://github.com/caikovsky/auto-pr.git
+
+# Verify it works
+auto-pr --help
+```
+
+#### Option 2: Using uv tool
+
+```bash
+# Install globally with uv
+uv tool install git+https://github.com/caikovsky/auto-pr.git
+
+# Verify it works
+auto-pr --help
+```
+
+#### Option 3: Clone and Install
 
 ```bash
 # Clone the repository
 git clone https://github.com/caikovsky/auto-pr.git
 cd auto-pr
 
-# Install with uv
+# Install globally with pipx
+pipx install .
+
+# Or with uv
+uv tool install .
+```
+
+### Install for Development
+
+If you want to modify the tool:
+
+```bash
+git clone https://github.com/caikovsky/auto-pr.git
+cd auto-pr
+
+# Install in development mode
 uv sync
 
-# Or install globally with pipx
-pipx install .
+# Run from the project directory
+uv run auto-pr --help
 ```
 
 ## Usage
@@ -134,6 +193,29 @@ auto_pr/
 ```
 
 See `docs/` for detailed architecture and style guidelines.
+
+## Updating
+
+```bash
+# If installed with pipx
+pipx upgrade auto-pr
+
+# Or reinstall
+pipx install --force git+https://github.com/caikovsky/auto-pr.git
+
+# If installed with uv tool
+uv tool upgrade auto-pr
+```
+
+## Uninstall
+
+```bash
+# If installed with pipx
+pipx uninstall auto-pr
+
+# If installed with uv tool
+uv tool uninstall auto-pr
+```
 
 ## Development
 
