@@ -1,122 +1,55 @@
 # Auto-PR: AI-Powered Pull Request Generator
 
-A CLI tool that uses **AI (Gemini)** to automatically create intelligent, insightful GitHub Pull Requests. It analyzes your code changes, compares them to Jira ticket requirements, and generates comprehensive PR descriptions that give reviewers the context they need.
+A CLI tool that uses **AI** to automatically create intelligent GitHub Pull Requests. It analyzes your code changes, compares them to Jira ticket requirements, and generates comprehensive PR descriptions.
 
-## What It Does
+## Features
 
-Instead of manually writing PR descriptions, this tool:
-
-1. **Extracts the Jira ticket** from your branch name
-2. **Fetches ticket details** (title, description, requirements) via Atlassian CLI
-3. **Analyzes your git changes** (commits, diff, modified files)
-4. **Uses AI to understand** what you implemented and how it relates to the ticket
-5. **Generates an insightful PR description** with:
-   - Summary of changes and how they fulfill the ticket requirements
-   - Technical approach explanation
-   - Impacted areas of the codebase
-   - Key files reviewers should focus on
-   - Testing considerations
-
-## Example Output
-
-```markdown
-## Summary
-This PR implements the user authentication flow as specified in PROJ-123. 
-It adds OAuth2 integration with the identity provider and handles token 
-refresh automatically.
-
-## What Changed
-- Added AuthenticationService with OAuth2 support
-- Implemented token refresh mechanism in TokenManager
-- Added secure storage for credentials using Keychain
-- Updated LoginViewController to use new auth flow
-
-## Technical Approach
-The implementation uses the AppAuth library for OAuth2 compliance. Tokens 
-are securely stored in the iOS Keychain and automatically refreshed when 
-expired. The auth state is observed via Combine publishers.
-
-## Impacted Areas
-- Authentication module
-- Network layer (added auth interceptor)
-- Login/Signup flows
-
-## Key Files to Review
-- `AuthenticationService.swift` - Core auth logic, verify OAuth2 flow
-- `TokenManager.swift` - Token refresh logic, check edge cases
-- `KeychainStorage.swift` - Secure storage, verify encryption
-
-## Testing Considerations
-- Test login with valid/invalid credentials
-- Verify token refresh after expiration
-- Test logout clears all stored tokens
-- Check deep link handling during auth
-
-## Jira Ticket
-https://company.atlassian.net/browse/PROJ-123
-```
+- **AI-Powered Analysis** using Gemini, GitHub Copilot, Claude, or other AI CLIs
+- **Jira Integration** via Atlassian CLI (acli)
+- **Smart PR Descriptions** that explain what changed and why
+- **Multi-AI Testing** to compare outputs from different AI providers
+- **Auto-detects** installed AI CLI tools
+- PR title format: `[JIRA-XXX] - Task Title`
 
 ## Prerequisites
 
 ```bash
-# Install required tools
+# Core tools
 brew install gh jq
 brew install atlassian-labs/tap/acli
 
-# Install an AI CLI (any one of these)
-brew install gemini-cli   # Google Gemini (recommended)
-# OR
-brew install llm          # Simon Willison's LLM
-# OR  
-brew install mods         # Charmbracelet Mods
-# OR
-brew install ollama       # Local models
-
-# Authenticate
-gh auth login
-acli auth login
+# AI CLI (install at least one)
+brew install gemini-cli      # Google Gemini (recommended)
+# npm install -g copilot     # GitHub Copilot CLI
+# brew install llm           # Simon Willison's LLM
+# brew install mods          # Charmbracelet Mods
+# brew install ollama        # Local models
 ```
 
 ## Setup
 
-The tool auto-detects installed AI CLI tools. Supported:
-
-| CLI | Install | Notes |
-|-----|---------|-------|
-| `gemini` | `brew install gemini-cli` | Google Gemini (recommended) |
-| `claude` | Anthropic CLI | Claude models |
-| `llm` | `brew install llm` | Multiple providers |
-| `mods` | `brew install mods` | Charmbracelet |
-| `ollama` | `brew install ollama` | Local models |
-
-Run setup to see detected tools:
 ```bash
-auto-pr --setup
-```
+# Authenticate GitHub
+gh auth login
 
-### 3. Add to PATH
+# Authenticate Atlassian
+acli auth login
 
-Add to `~/.zshrc`:
-```bash
+# Add to PATH (in ~/.zshrc)
 export PATH="$PATH:/path/to/automate-pr"
+source ~/.zshrc
 ```
 
 ## Usage
 
 ```bash
 cd /path/to/your/repo
+git checkout task/TLAB-2023
 
-# Create a feature branch with Jira ticket
-git checkout -b task/PROJ-123-add-feature
-
-# Make your changes and commit
-git add .
-git commit -m "feat: implement feature X"
-
-# Preview the AI-generated PR
+# Preview AI-generated PR
 auto-pr --dry-run
 
-# Create the PR
+# Create PR
 auto-pr
 
 # Create as draft
@@ -130,29 +63,71 @@ auto-pr --draft
 | `--dry-run` | Preview PR without creating |
 | `--draft`, `-d` | Create as draft PR |
 | `--base`, `-b` | Base branch (default: main) |
-| `--setup` | Configure Gemini API key |
-| `--setup-help` | Show full setup instructions |
+| `--test [dir]` | Compare outputs from multiple AI CLIs |
+| `--setup` | Configure AI CLI tool |
 | `--help`, `-h` | Show help |
 
-## How the AI Analysis Works
+## AI Comparison Testing
 
-The tool sends the following context to Gemini AI:
+Compare results from different AI CLIs:
 
-1. **Jira ticket info**: Title, description, type, requirements
-2. **Git commits**: All commit messages in your branch
-3. **Changed files**: List of modified files
-4. **Code diff**: Actual code changes (truncated if large)
+```bash
+# Run comparison test
+auto-pr --test
 
-The AI then:
-- Understands what the ticket asked for
-- Analyzes what your code actually does
-- Identifies the relationship between requirements and implementation
-- Highlights important changes for reviewers
-- Suggests testing approaches
+# Or specify output directory
+auto-pr --test ./my-test-results
+```
+
+Creates:
+- `prompt.txt` - The prompt sent to all AIs
+- `gemini_output.txt` - Output from Gemini
+- `copilot_output.txt` - Output from GitHub Copilot
+- `summary.md` - Timing and word counts
+
+Compare:
+```bash
+diff -y ./my-test-results/gemini_output.txt ./my-test-results/copilot_output.txt
+```
+
+## Supported AI CLIs
+
+| CLI | Command | Notes |
+|-----|---------|-------|
+| Gemini | `gemini` | Google Gemini (recommended) |
+| Copilot | `copilot` | GitHub Copilot CLI |
+| Claude | `claude` | Anthropic Claude |
+| LLM | `llm` | Multi-provider |
+| Mods | `mods` | Charmbracelet |
+| Ollama | `ollama` | Local models |
+
+## Example Output
+
+```markdown
+## Summary
+This PR transforms the auto-pr tool into an AI-powered PR generator
+that analyzes code changes and Jira tickets to create comprehensive
+descriptions automatically.
+
+## What Changed
+- Added AI CLI integration (Gemini, Copilot, Claude)
+- Implemented git diff analysis
+- Added Jira ticket context extraction
+
+## Technical Approach
+The script extracts git diffs and commit messages, combines them
+with Jira ticket data, and sends to the AI for analysis...
+
+## Key Files to Review
+- `auto-pr` - Main script with AI integration
+- `README.md` - Updated documentation
+
+## Testing Considerations
+- Test with different AI CLIs
+- Verify PR descriptions match code changes
+```
 
 ## Branch Naming
-
-The tool extracts Jira tickets from branch names:
 
 | Branch | Extracted Ticket |
 |--------|-----------------|
@@ -160,18 +135,9 @@ The tool extracts Jira tickets from branch names:
 | `feature/PROJ-123-login` | PROJ-123 |
 | `bugfix/ABC-456` | ABC-456 |
 
-## Configuration
-
-Config is stored at `~/.config/auto-pr/config`:
-
-```bash
-AI_CLI="gemini"  # or claude, llm, mods, ollama
-```
-
 ## Troubleshooting
 
 ### "No AI CLI tool found"
-Install one of the supported AI CLIs:
 ```bash
 brew install gemini-cli
 ```
@@ -181,19 +147,10 @@ brew install gemini-cli
 acli auth login
 ```
 
-### "Could not extract Jira ticket"
-Ensure your branch name contains a ticket ID like `PROJ-123`.
-
-### AI output not relevant
-- Make sure you have commits on your branch
-- The more code changes, the better the analysis
-- Check that Jira ticket has a description
-
-## Privacy
-
-- Code diffs are sent to Google's Gemini API
-- Jira data is fetched locally via acli
-- No data is stored by this tool beyond the API key
+### "GitHub CLI is not authenticated"
+```bash
+gh auth login
+```
 
 ## License
 
