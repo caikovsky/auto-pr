@@ -1,14 +1,19 @@
 #!/bin/bash
 
-# auto-pr: Automatically create GitHub PRs with Atlassian CLI (acli) integration
-# Reads PR template, extracts Jira ticket from branch, fills template automatically
+# auto-pr: Automatically create GitHub PRs with AI-powered descriptions
+# Uses Gemini AI to analyze code changes and Jira ticket to generate insightful PR content
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Configuration
+CONFIG_DIR="${HOME}/.config/auto-pr"
+CONFIG_FILE="${CONFIG_DIR}/config"
 
 #######################################
 # Utility Functions
@@ -30,9 +35,52 @@ log_error() {
     echo -e "${RED}✗${NC} $1" >&2
 }
 
+log_ai() {
+    echo -e "${CYAN}🤖${NC} $1" >&2
+}
+
 die() {
     log_error "$1"
     exit 1
+}
+
+#######################################
+# Configuration Management
+#######################################
+
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    fi
+}
+
+save_config() {
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_FILE" << EOF
+# Auto-PR Configuration
+GEMINI_API_KEY="$GEMINI_API_KEY"
+EOF
+    chmod 600 "$CONFIG_FILE"
+}
+
+setup_api_key() {
+    echo "Auto-PR Setup"
+    echo "============="
+    echo ""
+    echo "This tool uses Google Gemini AI to analyze your code changes."
+    echo ""
+    echo "Get your free API key from:"
+    echo "  https://aistudio.google.com/app/apikey"
+    echo ""
+    read -p "Enter your Gemini API key: " api_key
+    
+    if [[ -z "$api_key" ]]; then
+        die "API key is required"
+    fi
+    
+    GEMINI_API_KEY="$api_key"
+    save_config
+    log_success "Configuration saved to $CONFIG_FILE"
 }
 
 #######################################
@@ -43,15 +91,19 @@ check_prerequisites() {
     local missing=()
     
     if ! command -v gh &> /dev/null; then
-        missing+=("gh (GitHub CLI) - install with: brew install gh")
+        missing+=("gh (GitHub CLI) - brew install gh")
     fi
     
     if ! command -v acli &> /dev/null; then
-        missing+=("acli (Atlassian CLI) - install with: brew install atlassian-labs/tap/acli")
+        missing+=("acli (Atlassian CLI) - brew install atlassian-labs/tap/acli")
     fi
     
     if ! command -v jq &> /dev/null; then
-        missing+=("jq - install with: brew install jq")
+        missing+=("jq - brew install jq")
+    fi
+    
+    if ! command -v curl &> /dev/null; then
+        missing+=("curl")
     fi
     
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -62,16 +114,21 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if gh is authenticated
     if ! gh auth status &> /dev/null; then
         die "GitHub CLI is not authenticated. Run: gh auth login"
     fi
     
-    # Check if acli is authenticated
     if ! acli auth status &> /dev/null 2>&1; then
         log_error "Atlassian CLI is not authenticated."
         log_info "Run: acli auth login"
         exit 1
+    fi
+    
+    # Check for API key
+    load_config
+    if [[ -z "$GEMINI_API_KEY" ]]; then
+        log_warning "Gemini API key not configured."
+        setup_api_key
     fi
 }
 
@@ -103,17 +160,17 @@ gh auth login
 acli auth login
 ```
 
-## 4. Verify Setup
+## 4. Configure Gemini API Key
 
+Get a free API key from: https://aistudio.google.com/app/apikey
+
+Then run:
 ```bash
-acli auth status
-acli jira workitem view PROJ-123
-gh auth status
+auto-pr --setup
 ```
 
 ## 5. Add auto-pr to PATH
 
-Add to ~/.zshrc:
 ```bash
 export PATH="$PATH:/path/to/automate-pr"
 ```
@@ -123,7 +180,7 @@ export PATH="$PATH:/path/to/automate-pr"
 ```bash
 cd /path/to/your/repo
 git checkout task/TLAB-2023
-auto-pr --dry-run    # Preview
+auto-pr --dry-run    # Preview AI-generated PR
 auto-pr              # Create PR
 ```
 
@@ -131,7 +188,7 @@ EOF
 }
 
 #######################################
-# Extract Jira Ticket from Branch Name
+# Jira Functions
 #######################################
 
 extract_jira_ticket() {
@@ -139,20 +196,14 @@ extract_jira_ticket() {
     echo "$branch_name" | grep -oE '[A-Z]+-[0-9]+' | head -1
 }
 
-#######################################
-# Fetch Jira Ticket Details using ACLI
-#######################################
-
 fetch_jira_ticket_json() {
     local ticket="$1"
-    
     log_info "Fetching Jira ticket: $ticket"
     
     local response
     response=$(acli jira workitem view "$ticket" --json 2>&1)
-    local exit_code=$?
     
-    if [[ $exit_code -ne 0 ]] || echo "$response" | grep -qi '"error"\|not found\|does not exist'; then
+    if [[ $? -ne 0 ]] || echo "$response" | grep -qi '"error"\|not found'; then
         log_error "Failed to fetch Jira ticket: $ticket"
         return 1
     fi
@@ -160,19 +211,12 @@ fetch_jira_ticket_json() {
     echo "$response"
 }
 
-#######################################
-# Parse Jira Ticket Data
-#######################################
-
 get_ticket_title() {
-    local json_data="$1"
-    echo "$json_data" | jq -r '.fields.summary // "No title"'
+    echo "$1" | jq -r '.fields.summary // "No title"'
 }
 
 get_ticket_description() {
-    local json_data="$1"
-    local desc
-    desc=$(echo "$json_data" | jq -r '
+    echo "$1" | jq -r '
         def extract_text:
             if type == "object" then
                 if .text then .text
@@ -184,28 +228,24 @@ get_ticket_description() {
             else ""
             end;
         .fields.description | extract_text
-    ' 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')
-    
-    if [[ -z "$desc" || "$desc" == "null" || "$desc" == " " ]]; then
-        desc=""
-    fi
-    
-    echo "$desc"
+    ' 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g'
 }
 
 get_ticket_type() {
-    local json_data="$1"
-    echo "$json_data" | jq -r '.fields.issuetype.name // "Task"'
+    echo "$1" | jq -r '.fields.issuetype.name // "Task"'
 }
 
-get_ticket_status() {
-    local json_data="$1"
-    echo "$json_data" | jq -r '.fields.status.name // "Unknown"'
+get_ticket_acceptance_criteria() {
+    # Try to extract acceptance criteria from custom fields or description
+    echo "$1" | jq -r '
+        .fields.customfield_10014 // 
+        .fields.customfield_10015 // 
+        ""
+    ' 2>/dev/null
 }
 
 get_ticket_url() {
     local ticket="$1"
-    
     local site
     site=$(acli auth status 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.atlassian\.net' | head -1)
     
@@ -217,7 +257,7 @@ get_ticket_url() {
 }
 
 #######################################
-# Git Information Functions
+# Git Functions
 #######################################
 
 get_base_branch() {
@@ -240,9 +280,9 @@ get_commit_messages() {
     local base_branch="$1"
     
     if [[ -z "$base_branch" ]]; then
-        git log --oneline -10 --pretty=format:"- %s" 2>/dev/null
+        git log --oneline -20 --pretty=format:"%s" 2>/dev/null
     else
-        git log "${base_branch}..HEAD" --oneline --pretty=format:"- %s" 2>/dev/null
+        git log "${base_branch}..HEAD" --oneline --pretty=format:"%s" 2>/dev/null
     fi
 }
 
@@ -256,6 +296,21 @@ get_changed_files() {
     fi
 }
 
+get_diff_content() {
+    local base_branch="$1"
+    local max_lines="${2:-500}"
+    
+    local diff
+    if [[ -z "$base_branch" ]]; then
+        diff=$(git diff HEAD~1 2>/dev/null)
+    else
+        diff=$(git diff "${base_branch}..HEAD" 2>/dev/null)
+    fi
+    
+    # Truncate if too long (to fit API limits)
+    echo "$diff" | head -n "$max_lines"
+}
+
 get_diff_stat() {
     local base_branch="$1"
     
@@ -266,30 +321,162 @@ get_diff_stat() {
     fi
 }
 
-get_impacted_areas() {
-    local changed_files="$1"
+#######################################
+# AI Analysis with Gemini
+#######################################
+
+call_gemini_api() {
+    local prompt="$1"
     
-    if [[ -z "$changed_files" ]]; then
-        echo "- No files changed"
+    local request_body
+    request_body=$(jq -n \
+        --arg prompt "$prompt" \
+        '{
+            contents: [{
+                parts: [{
+                    text: $prompt
+                }]
+            }],
+            generationConfig: {
+                temperature: 0.3,
+                maxOutputTokens: 2048
+            }
+        }')
+    
+    local response
+    response=$(curl -s -X POST \
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "$request_body" 2>&1)
+    
+    # Check for errors
+    if echo "$response" | jq -e '.error' &>/dev/null; then
+        local error_msg
+        error_msg=$(echo "$response" | jq -r '.error.message // "Unknown error"')
+        log_error "Gemini API error: $error_msg"
+        return 1
+    fi
+    
+    # Extract the text response
+    echo "$response" | jq -r '.candidates[0].content.parts[0].text // ""'
+}
+
+generate_ai_pr_description() {
+    local ticket="$1"
+    local ticket_title="$2"
+    local ticket_description="$3"
+    local ticket_type="$4"
+    local ticket_url="$5"
+    local commit_messages="$6"
+    local changed_files="$7"
+    local diff_content="$8"
+    local diff_stat="$9"
+    local template_content="${10}"
+    
+    log_ai "Analyzing code changes with AI..."
+    
+    # Build the prompt
+    local prompt="You are an expert code reviewer helping create a Pull Request description.
+
+## Context
+
+**Jira Ticket:** ${ticket}
+**Ticket Title:** ${ticket_title}
+**Ticket Type:** ${ticket_type}
+**Ticket URL:** ${ticket_url}
+
+**Jira Description/Requirements:**
+${ticket_description:-"No description provided"}
+
+**Commits in this PR:**
+${commit_messages:-"No commits"}
+
+**Files Changed:**
+${changed_files:-"No files"}
+
+**Diff Statistics:**
+${diff_stat:-"No stats"}
+
+**Code Diff (truncated if large):**
+\`\`\`
+${diff_content:-"No diff available"}
+\`\`\`
+
+## Your Task
+
+Analyze the code changes and generate a comprehensive PR description. You must:
+
+1. **Summarize what was implemented** - Explain the changes in plain language, relating them to the Jira ticket requirements
+2. **Explain the technical approach** - How the changes solve the problem
+3. **Identify impacted areas** - What parts of the application are affected
+4. **Highlight important changes** - Point out key files/functions reviewers should focus on
+5. **Note any potential risks or considerations** - Things reviewers should watch for
+
+## Output Format
+
+Generate the PR description in this exact markdown format:
+
+## Summary
+[2-3 sentences summarizing what this PR accomplishes and how it relates to the ticket]
+
+## What Changed
+[Bullet points explaining the key changes made]
+
+## Technical Approach
+[Brief explanation of how the solution was implemented]
+
+## Impacted Areas
+[List the areas/components affected by these changes]
+
+## Key Files to Review
+[List the most important files reviewers should focus on, with brief explanation why]
+
+## Testing Considerations
+[Suggestions for how to test these changes]
+
+## Jira Ticket
+${ticket_url}
+
+---
+*This description was generated with AI assistance based on the code diff and Jira ticket.*
+
+IMPORTANT: Be specific and reference actual code, files, and functions from the diff. Don't be generic."
+
+    local ai_response
+    ai_response=$(call_gemini_api "$prompt")
+    
+    if [[ $? -ne 0 ]] || [[ -z "$ai_response" ]]; then
+        log_warning "AI generation failed, falling back to basic template"
+        generate_basic_description "$ticket_url" "$ticket_description" "$commit_messages" "$changed_files"
         return
     fi
     
-    echo "$changed_files" | while read -r file; do
-        if [[ -n "$file" ]]; then
-            local dir=$(dirname "$file" | cut -d'/' -f1-2)
-            if [[ "$dir" == "." ]]; then
-                echo "Root"
-            else
-                echo "$dir"
-            fi
-        fi
-    done | sort -u | head -10 | while read -r area; do
-        echo "- \`$area\`"
-    done
+    echo "$ai_response"
+}
+
+generate_basic_description() {
+    local ticket_url="$1"
+    local ticket_description="$2"
+    local commit_messages="$3"
+    local changed_files="$4"
+    
+    cat << EOF
+## Summary
+[Please describe your changes]
+
+## What Changed
+$(echo "$commit_messages" | while read -r msg; do echo "- $msg"; done)
+
+## Impacted Areas
+$(echo "$changed_files" | head -10 | while read -r file; do echo "- \`$file\`"; done)
+
+## Jira Ticket
+$ticket_url
+EOF
 }
 
 #######################################
-# Find PR Template
+# PR Template Functions
 #######################################
 
 find_pr_template() {
@@ -316,142 +503,56 @@ find_pr_template() {
         fi
     done
     
-    log_warning "No PR template found, using default template"
     echo ""
 }
 
-#######################################
-# Generate PR Description
-#######################################
-
-generate_pr_description() {
-    local template_path="$1"
-    local ticket="$2"
+merge_with_template() {
+    local ai_content="$1"
+    local template_path="$2"
     local ticket_url="$3"
-    local ticket_description="$4"
-    local ticket_type="$5"
-    local commit_messages="$6"
-    local changed_files="$7"
-    local diff_stat="$8"
     
-    # Read template or use default
-    local template=""
-    if [[ -n "$template_path" && -f "$template_path" ]]; then
-        template=$(cat "$template_path")
-    else
-        template="## Description
-
-<!-- Description will be filled automatically -->
-
-## Jira Ticket
-
-<!-- Jira link -->
-
-## Impacted Areas
-
-<!-- Areas affected -->
-
-## Checklist
-- [ ] Self-review completed
-- [ ] Tests added/updated"
+    if [[ -z "$template_path" ]] || [[ ! -f "$template_path" ]]; then
+        # No template, use AI content directly
+        echo "$ai_content"
+        return
     fi
     
-    # Build description content
-    local description_parts=""
+    log_info "Merging AI analysis with PR template..."
     
-    if [[ -n "$ticket_description" ]]; then
-        description_parts="**Jira Description:** $ticket_description"
-    fi
+    local template
+    template=$(cat "$template_path")
     
-    if [[ -n "$commit_messages" ]]; then
-        if [[ -n "$description_parts" ]]; then
-            description_parts="$description_parts
-
-**Commits:**
-$commit_messages"
-        else
-            description_parts="**Commits:**
-$commit_messages"
-        fi
-    fi
+    # Replace placeholder Jira URLs
+    template=$(echo "$template" | sed -E "s|https://[a-zA-Z0-9.-]+\.atlassian\.net/browse/[A-Z]+-[0-9]+|$ticket_url|g")
     
-    # Build impacted areas
-    local impacted_areas=""
-    if [[ -n "$changed_files" ]]; then
-        impacted_areas=$(get_impacted_areas "$changed_files")
-    fi
+    # Build merged content: AI content first, then remaining template sections
+    local merged=""
     
-    # Process template line by line
-    local output=""
-    local in_section=""
-    local section_filled=false
-    local prev_was_header=false
+    # Add the AI-generated content
+    merged="$ai_content"
+    
+    # Add remaining template sections that aren't covered by AI
+    # (like Checklist, Screenshots, etc.)
+    local in_section=false
+    local current_section=""
+    local skip_sections="Summary|What Changed|Technical Approach|Impacted Areas|Key Files|Testing|Jira Ticket|Description|Added in this PR"
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        # Check if this is a section header
         if [[ "$line" =~ ^##\  ]]; then
-            in_section="$line"
-            section_filled=false
-            prev_was_header=true
-            output+="$line"$'\n'
-            continue
+            current_section="$line"
+            # Check if this section is already in AI content
+            if echo "$current_section" | grep -qiE "$skip_sections"; then
+                in_section=true
+            else
+                in_section=false
+                merged+=$'\n'"$line"
+            fi
+        elif [[ "$in_section" == false ]]; then
+            merged+=$'\n'"$line"
         fi
-        
-        # Check if this is an HTML comment (placeholder) or empty line after header
-        local is_placeholder=false
-        if [[ "$line" =~ ^[[:space:]]*\<!--.*--\>$ ]]; then
-            is_placeholder=true
-        fi
-        
-        # Skip placeholder comments if section was already filled
-        if [[ "$is_placeholder" == true ]] && [[ "$section_filled" == true ]]; then
-            continue
-        fi
-        
-        # Fill section content
-        if [[ "$section_filled" == false ]] && { [[ "$is_placeholder" == true ]] || { [[ "$prev_was_header" == true ]] && [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]]; }; }; then
-            prev_was_header=false
-            
-            case "$in_section" in
-                *"JIRA"*|*"Jira Ticket"*)
-                    output+="$ticket_url"$'\n'
-                    section_filled=true
-                    continue
-                    ;;
-                *"Description"*|*"Added in this PR"*)
-                    if [[ -n "$description_parts" ]]; then
-                        output+="$description_parts"$'\n'
-                        section_filled=true
-                        continue
-                    fi
-                    ;;
-                *"Impacted Areas"*)
-                    if [[ -n "$impacted_areas" ]]; then
-                        output+="$impacted_areas"$'\n'
-                        section_filled=true
-                        continue
-                    fi
-                    ;;
-                *"Type of Change"*)
-                    output+="$ticket_type"$'\n'
-                    section_filled=true
-                    continue
-                    ;;
-            esac
-        fi
-        
-        prev_was_header=false
-        
-        # Check for placeholder Jira URLs and replace them
-        if [[ "$line" =~ https://[a-zA-Z0-9.-]+\.atlassian\.net/browse/[A-Z]+-[0-9]+ ]]; then
-            line=$(echo "$line" | sed -E "s|https://[a-zA-Z0-9.-]+\.atlassian\.net/browse/[A-Z]+-[0-9]+|$ticket_url|g")
-        fi
-        
-        output+="$line"$'\n'
     done <<< "$template"
     
-    # Remove trailing newline
-    echo "${output%$'\n'}"
+    echo "$merged"
 }
 
 #######################################
@@ -493,7 +594,11 @@ main() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --setup-help|--setup)
+            --setup)
+                setup_api_key
+                exit 0
+                ;;
+            --setup-help)
                 show_setup_help
                 exit 0
                 ;;
@@ -512,8 +617,11 @@ main() {
             --help|-h)
                 echo "Usage: auto-pr [OPTIONS]"
                 echo ""
+                echo "AI-powered PR creation with Jira integration"
+                echo ""
                 echo "Options:"
-                echo "  --setup-help  Show setup instructions"
+                echo "  --setup       Configure Gemini API key"
+                echo "  --setup-help  Show full setup instructions"
                 echo "  --draft, -d   Create PR as draft"
                 echo "  --base, -b    Specify base branch (default: main)"
                 echo "  --dry-run     Preview PR without creating"
@@ -538,6 +646,7 @@ main() {
     
     log_info "Current branch: $current_branch"
     
+    # Extract Jira ticket
     local ticket
     ticket=$(extract_jira_ticket "$current_branch")
     
@@ -548,62 +657,66 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
     
     log_success "Found Jira ticket: $ticket"
     
+    # Fetch Jira data
     local jira_json
     jira_json=$(fetch_jira_ticket_json "$ticket")
     
-    if [[ $? -ne 0 || -z "$jira_json" ]]; then
+    if [[ $? -ne 0 ]] || [[ -z "$jira_json" ]]; then
         die "Failed to fetch Jira ticket details"
     fi
     
-    local ticket_title ticket_description ticket_type ticket_status ticket_url
+    local ticket_title ticket_description ticket_type ticket_url
     ticket_title=$(get_ticket_title "$jira_json")
     ticket_description=$(get_ticket_description "$jira_json")
     ticket_type=$(get_ticket_type "$jira_json")
-    ticket_status=$(get_ticket_status "$jira_json")
     ticket_url=$(get_ticket_url "$ticket")
     
-    log_success "Ticket title: $ticket_title"
-    log_info "Ticket type: $ticket_type"
-    log_info "Ticket status: $ticket_status"
+    log_success "Ticket: $ticket_title"
+    log_info "Type: $ticket_type"
     
+    # Get git information
     local resolved_base
     resolved_base=$(get_base_branch "$base_branch")
     
-    log_info "Analyzing commits and changes..."
+    log_info "Analyzing git changes against ${resolved_base:-HEAD}..."
     
-    local commit_messages changed_files diff_stat
+    local commit_messages changed_files diff_content diff_stat
     commit_messages=$(get_commit_messages "$resolved_base")
     changed_files=$(get_changed_files "$resolved_base")
+    diff_content=$(get_diff_content "$resolved_base" 800)
     diff_stat=$(get_diff_stat "$resolved_base")
     
     local commit_count file_count
-    if [[ -n "$commit_messages" ]]; then
-        commit_count=$(echo "$commit_messages" | grep -c "^-" 2>/dev/null || echo "0")
-    else
-        commit_count=0
-    fi
-    
-    if [[ -n "$changed_files" ]]; then
-        file_count=$(echo "$changed_files" | wc -l | tr -d ' ')
-    else
-        file_count=0
-    fi
+    [[ -n "$commit_messages" ]] && commit_count=$(echo "$commit_messages" | wc -l | tr -d ' ') || commit_count=0
+    [[ -n "$changed_files" ]] && file_count=$(echo "$changed_files" | wc -l | tr -d ' ') || file_count=0
     
     log_info "Found $commit_count commit(s) and $file_count changed file(s)"
     
+    # Find PR template
     local template_path
     template_path=$(find_pr_template)
     
-    local pr_body
-    pr_body=$(generate_pr_description \
-        "$template_path" \
+    if [[ -n "$template_path" ]]; then
+        log_info "Found PR template: $template_path"
+    fi
+    
+    # Generate AI-powered description
+    local ai_description
+    ai_description=$(generate_ai_pr_description \
         "$ticket" \
-        "$ticket_url" \
+        "$ticket_title" \
         "$ticket_description" \
         "$ticket_type" \
+        "$ticket_url" \
         "$commit_messages" \
         "$changed_files" \
-        "$diff_stat")
+        "$diff_content" \
+        "$diff_stat" \
+        "")
+    
+    # Merge with template if exists
+    local pr_body
+    pr_body=$(merge_with_template "$ai_description" "$template_path" "$ticket_url")
     
     local pr_title="[${ticket}] - ${ticket_title}"
     
@@ -632,3 +745,13 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
 }
 
 main "$@"
+
+# Helper function to validate input
+validate_ticket_format() {
+    local input="$1"
+    if [[ ! "$input" =~ ^[A-Z]+-[0-9]+$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
