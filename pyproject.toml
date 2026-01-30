@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-auto-pr = "auto_pr.cli.app:app"
+autopr = "auto_pr.cli.app:app"
 
 [build-system]
 requires = ["hatchling"]

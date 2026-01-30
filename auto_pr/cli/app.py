@@ -24,7 +24,7 @@ from auto_pr.infrastructure import (
 
 __version__ = "2.0.0"
 
-app = typer.Typer(name="auto-pr", help="AI-powered PR creation tool")
+app = typer.Typer(name="autopr", help="AI-powered PR creation tool")
 console = Console()
 
 
