@@ -1,126 +1,117 @@
-# Auto-PR: Automated Pull Request Creator
+# Auto-PR: AI-Powered Pull Request Generator
 
-A CLI tool that automatically creates GitHub Pull Requests with intelligent content generation. Combines **Jira ticket data** with **git commit history** and **changed files** to auto-fill PR templates.
+A CLI tool that uses **AI (Gemini)** to automatically create intelligent, insightful GitHub Pull Requests. It analyzes your code changes, compares them to Jira ticket requirements, and generates comprehensive PR descriptions that give reviewers the context they need.
 
-## Features
+## What It Does
 
-- **Extracts Jira ticket** from branch name (e.g., `task/TLAB-2023` → `TLAB-2023`)
-- **Fetches Jira data** via Atlassian CLI (acli)
-- **Analyzes git history** - commits, changed files, impacted areas
-- **Auto-fills PR templates** with intelligent content:
-  - Description → Jira ticket description + commit messages
-  - Jira Ticket → Actual ticket URL
-  - Impacted Areas → Changed directories/files
-  - Replaces placeholder URLs (e.g., `JIRA-0000`)
-- **PR title format**: `[JIRA-XXX] - Task Title`
-- Supports draft PRs and dry-run preview
+Instead of manually writing PR descriptions, this tool:
+
+1. **Extracts the Jira ticket** from your branch name
+2. **Fetches ticket details** (title, description, requirements) via Atlassian CLI
+3. **Analyzes your git changes** (commits, diff, modified files)
+4. **Uses AI to understand** what you implemented and how it relates to the ticket
+5. **Generates an insightful PR description** with:
+   - Summary of changes and how they fulfill the ticket requirements
+   - Technical approach explanation
+   - Impacted areas of the codebase
+   - Key files reviewers should focus on
+   - Testing considerations
+
+## Example Output
+
+```markdown
+## Summary
+This PR implements the user authentication flow as specified in PROJ-123. 
+It adds OAuth2 integration with the identity provider and handles token 
+refresh automatically.
+
+## What Changed
+- Added AuthenticationService with OAuth2 support
+- Implemented token refresh mechanism in TokenManager
+- Added secure storage for credentials using Keychain
+- Updated LoginViewController to use new auth flow
+
+## Technical Approach
+The implementation uses the AppAuth library for OAuth2 compliance. Tokens 
+are securely stored in the iOS Keychain and automatically refreshed when 
+expired. The auth state is observed via Combine publishers.
+
+## Impacted Areas
+- Authentication module
+- Network layer (added auth interceptor)
+- Login/Signup flows
+
+## Key Files to Review
+- `AuthenticationService.swift` - Core auth logic, verify OAuth2 flow
+- `TokenManager.swift` - Token refresh logic, check edge cases
+- `KeychainStorage.swift` - Secure storage, verify encryption
+
+## Testing Considerations
+- Test login with valid/invalid credentials
+- Verify token refresh after expiration
+- Test logout clears all stored tokens
+- Check deep link handling during auth
+
+## Jira Ticket
+https://company.atlassian.net/browse/PROJ-123
+```
 
 ## Prerequisites
 
 ```bash
+# Install required tools
 brew install gh jq
 brew install atlassian-labs/tap/acli
+
+# Authenticate
+gh auth login
+acli auth login
 ```
 
 ## Setup
 
-### 1. Authenticate GitHub CLI
-```bash
-gh auth login
-```
+### 1. Get Gemini API Key (Free)
 
-### 2. Authenticate Atlassian CLI
+1. Go to: https://aistudio.google.com/app/apikey
+2. Click "Create API Key"
+3. Copy the key
+
+### 2. Configure auto-pr
+
 ```bash
-acli auth login
+# Run setup
+./auto-pr --setup
+
+# Enter your Gemini API key when prompted
 ```
-This opens a browser for OAuth authentication.
 
 ### 3. Add to PATH
+
 Add to `~/.zshrc`:
 ```bash
 export PATH="$PATH:/path/to/automate-pr"
-```
-
-### 4. Verify
-```bash
-acli auth status
-gh auth status
 ```
 
 ## Usage
 
 ```bash
 cd /path/to/your/repo
-git checkout task/TLAB-2023
 
-# Preview the PR
+# Create a feature branch with Jira ticket
+git checkout -b task/PROJ-123-add-feature
+
+# Make your changes and commit
+git add .
+git commit -m "feat: implement feature X"
+
+# Preview the AI-generated PR
 auto-pr --dry-run
 
-# Create PR
+# Create the PR
 auto-pr
 
 # Create as draft
 auto-pr --draft
-
-# Target different base branch
-auto-pr --base develop
-```
-
-## How It Works
-
-### 1. Extracts Jira Ticket
-From branch names like:
-- `task/TLAB-2023`
-- `feature/PROJ-123-add-login`
-- `bugfix/ABC-456`
-
-### 2. Fetches Jira Data
-Using `acli jira workitem view`:
-- Title (used in PR title)
-- Description (added to PR body)
-- Type (Task, Bug, Story, etc.)
-- Status
-
-### 3. Analyzes Git Changes
-- Commit messages since base branch
-- Changed files
-- Impacted directories
-
-### 4. Fills PR Template
-Detects and fills common sections:
-
-| Section | Content |
-|---------|---------|
-| `## Description` / `## Added in this PR` | Jira description + commits |
-| `## JIRA Ticket` / `## Jira Ticket` | Ticket URL |
-| `## Impacted Areas` | Changed directories |
-| `## Type of Change` | Jira issue type |
-
-Also replaces placeholder URLs like `https://company.atlassian.net/browse/JIRA-0000`.
-
-## Example Output
-
-```
-PR Title: [TLAB-2023] - [AN] - [SPIKE] - Draft Epic for Live chat integration
-
-PR Body:
-## Description
-**Jira Description:** Review the attached documentation from Telus Chat SDK...
-
-**Commits:**
-- feat: add chat SDK integration
-- fix: handle connection errors
-
-## Jira Ticket
-https://everlong.atlassian.net/browse/TLAB-2023
-
-## Impacted Areas
-- `src/chat`
-- `tests/chat`
-
-## Checklist
-- [ ] Self-review completed
-- [ ] Tests added/updated
 ```
 
 ## Options
@@ -130,31 +121,68 @@ https://everlong.atlassian.net/browse/TLAB-2023
 | `--dry-run` | Preview PR without creating |
 | `--draft`, `-d` | Create as draft PR |
 | `--base`, `-b` | Base branch (default: main) |
-| `--setup-help` | Show setup instructions |
+| `--setup` | Configure Gemini API key |
+| `--setup-help` | Show full setup instructions |
 | `--help`, `-h` | Show help |
 
-## Supported PR Template Locations
+## How the AI Analysis Works
 
-1. `.github/PULL_REQUEST_TEMPLATE.md`
-2. `.github/pull_request_template.md`
-3. `.github/PULL_REQUEST_TEMPLATE/pull_request_template.md`
-4. `docs/PULL_REQUEST_TEMPLATE.md`
-5. `PULL_REQUEST_TEMPLATE.md`
+The tool sends the following context to Gemini AI:
+
+1. **Jira ticket info**: Title, description, type, requirements
+2. **Git commits**: All commit messages in your branch
+3. **Changed files**: List of modified files
+4. **Code diff**: Actual code changes (truncated if large)
+
+The AI then:
+- Understands what the ticket asked for
+- Analyzes what your code actually does
+- Identifies the relationship between requirements and implementation
+- Highlights important changes for reviewers
+- Suggests testing approaches
+
+## Branch Naming
+
+The tool extracts Jira tickets from branch names:
+
+| Branch | Extracted Ticket |
+|--------|-----------------|
+| `task/TLAB-2023` | TLAB-2023 |
+| `feature/PROJ-123-login` | PROJ-123 |
+| `bugfix/ABC-456` | ABC-456 |
+
+## Configuration
+
+Config is stored at `~/.config/auto-pr/config`:
+
+```bash
+GEMINI_API_KEY="your-api-key"
+```
 
 ## Troubleshooting
+
+### "Gemini API error"
+- Verify your API key: `cat ~/.config/auto-pr/config`
+- Re-run setup: `auto-pr --setup`
 
 ### "Atlassian CLI is not authenticated"
 ```bash
 acli auth login
 ```
 
-### "Could not extract Jira ticket from branch"
-Ensure branch name contains ticket ID: `task/PROJ-123`
+### "Could not extract Jira ticket"
+Ensure your branch name contains a ticket ID like `PROJ-123`.
 
-### "Failed to fetch Jira ticket"
-```bash
-acli jira workitem view PROJ-123  # Test manually
-```
+### AI output not relevant
+- Make sure you have commits on your branch
+- The more code changes, the better the analysis
+- Check that Jira ticket has a description
+
+## Privacy
+
+- Code diffs are sent to Google's Gemini API
+- Jira data is fetched locally via acli
+- No data is stored by this tool beyond the API key
 
 ## License
 
