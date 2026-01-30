@@ -91,6 +91,28 @@ autopr --dry-run
 autopr --draft
 ```
 
+### Updating Existing PRs
+
+If a PR already exists for your branch, `autopr` will detect it and prompt you:
+
+```
+Found existing PR #42: [PROJ-123] Add feature
+URL: https://github.com/user/repo/pull/42
+
+[U]pdate existing PR or create [N]ew? [U/n]: 
+```
+
+You can also skip the prompt:
+
+```bash
+# Always update existing PR (skip prompt)
+autopr --update
+autopr -u
+
+# Always create new PR (skip prompt)
+autopr --new
+```
+
 ### AI Provider Selection
 
 ```bash
@@ -129,6 +151,8 @@ Options:
   --gemini             Use Gemini AI
   --copilot            Use GitHub Copilot
   --agent              Use Cursor Agent
+  -u, --update         Update existing PR (skip prompt)
+  --new                Create new PR (skip prompt)
   --test               Compare all AI providers
   --test-dir PATH      Output directory for --test
   -v, --verbose        Verbose output
