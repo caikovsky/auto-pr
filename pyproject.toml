@@ -41,7 +41,12 @@ disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=auto_pr --cov-report=term-missing"
+addopts = "-v"
 
 [tool.hatch.build.targets.wheel]
 packages = ["auto_pr"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
