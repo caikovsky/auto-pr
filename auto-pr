@@ -1,0 +1,493 @@
+#!/bin/bash
+
+# auto-pr: Automatically create GitHub PRs with Atlassian CLI (acli) integration
+# Reads PR template, extracts Jira ticket from branch, fills template automatically
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+#######################################
+# Utility Functions
+#######################################
+
+log_info() {
+    echo -e "${BLUE}ℹ${NC} $1" >&2
+}
+
+log_success() {
+    echo -e "${GREEN}✓${NC} $1" >&2
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠${NC} $1" >&2
+}
+
+log_error() {
+    echo -e "${RED}✗${NC} $1" >&2
+}
+
+die() {
+    log_error "$1"
+    exit 1
+}
+
+#######################################
+# Check Prerequisites
+#######################################
+
+check_prerequisites() {
+    local missing=()
+    
+    if ! command -v gh &> /dev/null; then
+        missing+=("gh (GitHub CLI) - install with: brew install gh")
+    fi
+    
+    if ! command -v acli &> /dev/null; then
+        missing+=("acli (Atlassian CLI) - install with: brew install atlassian-labs/tap/acli")
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        missing+=("jq - install with: brew install jq")
+    fi
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_error "Missing required tools:"
+        for tool in "${missing[@]}"; do
+            echo "  - $tool"
+        done
+        exit 1
+    fi
+    
+    # Check if gh is authenticated
+    if ! gh auth status &> /dev/null; then
+        die "GitHub CLI is not authenticated. Run: gh auth login"
+    fi
+    
+    # Check if acli is authenticated
+    if ! acli auth status &> /dev/null 2>&1; then
+        log_error "Atlassian CLI is not authenticated."
+        log_info "Run: acli auth login"
+        log_info "See setup instructions with: auto-pr --setup-help"
+        exit 1
+    fi
+}
+
+#######################################
+# Setup Help
+#######################################
+
+show_setup_help() {
+    cat << 'EOF'
+Auto-PR Setup Guide
+===================
+
+## 1. Install Required Tools
+
+```bash
+brew install gh jq
+brew install atlassian-labs/tap/acli
+```
+
+## 2. Configure GitHub CLI
+
+```bash
+gh auth login
+```
+- Select GitHub.com
+- Choose HTTPS
+- Authenticate with browser
+
+## 3. Configure Atlassian CLI
+
+```bash
+acli auth login
+```
+
+This will open a browser window for OAuth authentication.
+Log in with your Atlassian account and authorize the CLI.
+
+## 4. Verify Setup
+
+```bash
+# Test Atlassian CLI
+acli auth status                        # Shows authenticated accounts
+acli jira workitem view PROJ-123        # View a ticket
+
+# Test GitHub CLI
+gh auth status                          # Shows authentication status
+```
+
+## 5. Add auto-pr to PATH
+
+Add to ~/.zshrc:
+```bash
+export PATH="$PATH:/Users/caique-maurano/Script/automate-pr"
+```
+
+Then reload:
+```bash
+source ~/.zshrc
+```
+
+## Usage
+
+```bash
+cd /path/to/your/repo
+git checkout task/TLAB-2023
+auto-pr
+```
+
+## ACLI Quick Reference
+
+```bash
+acli auth login                         # Authenticate via OAuth
+acli auth status                        # Check auth status
+acli auth logout                        # Logout
+acli jira workitem view KEY-123         # View ticket
+acli jira workitem view KEY-123 --json  # View ticket as JSON
+```
+
+EOF
+}
+
+#######################################
+# Extract Jira Ticket from Branch Name
+#######################################
+
+extract_jira_ticket() {
+    local branch_name="$1"
+    # Match common Jira ticket patterns: PROJECT-123
+    # Handles branches like: task/TLAB-2023, feature/PROJ-123-description, bugfix/ABC-456
+    echo "$branch_name" | grep -oE '[A-Z]+-[0-9]+' | head -1
+}
+
+#######################################
+# Fetch Jira Ticket Details using ACLI
+#######################################
+
+fetch_jira_ticket_json() {
+    local ticket="$1"
+    
+    log_info "Fetching Jira ticket: $ticket"
+    
+    # Get ticket details in JSON format using acli
+    local response
+    response=$(acli jira workitem view "$ticket" --json 2>&1)
+    local exit_code=$?
+    
+    if [[ $exit_code -ne 0 ]] || echo "$response" | grep -qi "error\|not found\|does not exist"; then
+        log_error "Failed to fetch Jira ticket: $ticket"
+        log_info "Error: $response"
+        return 1
+    fi
+    
+    echo "$response"
+}
+
+#######################################
+# Parse Jira Ticket Data from ACLI JSON
+#######################################
+
+get_ticket_title() {
+    local json_data="$1"
+    echo "$json_data" | jq -r '.fields.summary // "No title"'
+}
+
+get_ticket_description() {
+    local json_data="$1"
+    # ACLI returns description in Atlassian Document Format, extract text content
+    local desc
+    desc=$(echo "$json_data" | jq -r '
+        [.fields.description.content[]?.content[]?.text // empty] | join(" ")
+    ' 2>/dev/null)
+    
+    if [[ -z "$desc" || "$desc" == "null" ]]; then
+        desc="No description available"
+    fi
+    
+    echo "$desc"
+}
+
+get_ticket_type() {
+    local json_data="$1"
+    echo "$json_data" | jq -r '.fields.issuetype.name // "Task"'
+}
+
+get_ticket_status() {
+    local json_data="$1"
+    echo "$json_data" | jq -r '.fields.status.name // "Unknown"'
+}
+
+get_ticket_url() {
+    local ticket="$1"
+    
+    # Get site from auth status
+    local site
+    site=$(acli auth status 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.atlassian\.net' | head -1)
+    
+    if [[ -n "$site" ]]; then
+        echo "https://${site}/browse/${ticket}"
+    else
+        echo "https://YOURSITE.atlassian.net/browse/${ticket}"
+    fi
+}
+
+#######################################
+# Find PR Template
+#######################################
+
+find_pr_template() {
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+    
+    if [[ -z "$repo_root" ]]; then
+        log_error "Not in a git repository"
+        return 1
+    fi
+    
+    # Common PR template locations
+    local template_paths=(
+        ".github/PULL_REQUEST_TEMPLATE.md"
+        ".github/pull_request_template.md"
+        ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"
+        "docs/PULL_REQUEST_TEMPLATE.md"
+        "PULL_REQUEST_TEMPLATE.md"
+        "pull_request_template.md"
+    )
+    
+    for path in "${template_paths[@]}"; do
+        local full_path="${repo_root}/${path}"
+        if [[ -f "$full_path" ]]; then
+            echo "$full_path"
+            return 0
+        fi
+    done
+    
+    log_warning "No PR template found, using default template"
+    echo ""
+}
+
+#######################################
+# Fill PR Template
+#######################################
+
+fill_pr_template() {
+    local template_path="$1"
+    local ticket="$2"
+    local ticket_title="$3"
+    local ticket_description="$4"
+    local ticket_url="$5"
+    local ticket_type="$6"
+    
+    local template_content=""
+    
+    if [[ -n "$template_path" && -f "$template_path" ]]; then
+        template_content=$(cat "$template_path")
+    else
+        # Default template if none found
+        template_content="## Description
+<!-- Describe your changes -->
+
+## Jira Ticket
+<!-- Link to Jira ticket -->
+
+## Type of Change
+<!-- What type of change is this? -->
+
+## Testing
+<!-- How was this tested? -->
+
+## Checklist
+- [ ] Code follows project style guidelines
+- [ ] Self-review completed
+- [ ] Tests added/updated
+- [ ] Documentation updated if needed"
+    fi
+    
+    # Use awk to replace patterns (more robust than sed for this use case)
+    # Replace placeholder Jira URLs like https://xxx.atlassian.net/browse/JIRA-0000
+    template_content=$(echo "$template_content" | awk -v url="$ticket_url" '{
+        gsub(/https:\/\/[a-zA-Z0-9.-]+\.atlassian\.net\/browse\/[A-Z]+-[0-9]+/, url)
+        print
+    }')
+    
+    # Replace common placeholders
+    template_content=$(echo "$template_content" | awk -v url="$ticket_url" '{
+        gsub(/<!-- Link to Jira ticket -->/, url)
+        gsub(/\[JIRA_LINK\]/, url)
+        gsub(/\{JIRA_LINK\}/, url)
+        gsub(/JIRA_TICKET_URL/, url)
+        print
+    }')
+    
+    echo "$template_content"
+}
+
+#######################################
+# Create Pull Request
+#######################################
+
+create_pr() {
+    local title="$1"
+    local body="$2"
+    local base_branch="$3"
+    local draft="$4"
+    
+    log_info "Creating pull request..."
+    
+    local draft_flag=""
+    if [[ "$draft" == "true" ]]; then
+        draft_flag="--draft"
+    fi
+    
+    # Create the PR using gh CLI
+    local pr_url
+    if [[ -n "$draft_flag" ]]; then
+        pr_url=$(gh pr create --title "$title" --body "$body" --base "$base_branch" $draft_flag 2>&1)
+    else
+        pr_url=$(gh pr create --title "$title" --body "$body" --base "$base_branch" 2>&1)
+    fi
+    
+    if [[ $? -eq 0 ]]; then
+        log_success "Pull request created successfully!"
+        echo -e "${GREEN}PR URL:${NC} $pr_url"
+    else
+        log_error "Failed to create pull request: $pr_url"
+        exit 1
+    fi
+}
+
+#######################################
+# Main Function
+#######################################
+
+main() {
+    local draft="false"
+    local base_branch="main"
+    local dry_run="false"
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --setup-help|--setup)
+                show_setup_help
+                exit 0
+                ;;
+            --draft|-d)
+                draft="true"
+                shift
+                ;;
+            --base|-b)
+                base_branch="$2"
+                shift 2
+                ;;
+            --dry-run)
+                dry_run="true"
+                shift
+                ;;
+            --help|-h)
+                echo "Usage: auto-pr [OPTIONS]"
+                echo ""
+                echo "Automatically create GitHub PRs with Atlassian CLI integration"
+                echo ""
+                echo "Options:"
+                echo "  --setup-help  Show setup instructions for Atlassian CLI"
+                echo "  --draft, -d   Create PR as draft"
+                echo "  --base, -b    Specify base branch (default: main)"
+                echo "  --dry-run     Preview PR without creating it"
+                echo "  --help, -h    Show this help message"
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Check all prerequisites
+    check_prerequisites
+    
+    # Get current branch
+    local current_branch
+    current_branch=$(git branch --show-current)
+    
+    if [[ -z "$current_branch" ]]; then
+        die "Could not determine current branch"
+    fi
+    
+    log_info "Current branch: $current_branch"
+    
+    # Extract Jira ticket from branch name
+    local ticket
+    ticket=$(extract_jira_ticket "$current_branch")
+    
+    if [[ -z "$ticket" ]]; then
+        die "Could not extract Jira ticket from branch name: $current_branch
+Expected format: task/PROJ-123 or feature/PROJ-123-description"
+    fi
+    
+    log_success "Found Jira ticket: $ticket"
+    
+    # Fetch Jira ticket details using ACLI
+    local jira_json
+    jira_json=$(fetch_jira_ticket_json "$ticket")
+    
+    if [[ $? -ne 0 || -z "$jira_json" ]]; then
+        die "Failed to fetch Jira ticket details"
+    fi
+    
+    # Parse ticket information
+    local ticket_title ticket_description ticket_type ticket_status ticket_url
+    ticket_title=$(get_ticket_title "$jira_json")
+    ticket_description=$(get_ticket_description "$jira_json")
+    ticket_type=$(get_ticket_type "$jira_json")
+    ticket_status=$(get_ticket_status "$jira_json")
+    ticket_url=$(get_ticket_url "$ticket")
+    
+    log_success "Ticket title: $ticket_title"
+    log_info "Ticket type: $ticket_type"
+    log_info "Ticket status: $ticket_status"
+    
+    # Find and fill PR template
+    local template_path
+    template_path=$(find_pr_template)
+    
+    local pr_body
+    pr_body=$(fill_pr_template "$template_path" "$ticket" "$ticket_title" "$ticket_description" "$ticket_url" "$ticket_type")
+    
+    # Build PR title: [JIRA-XXX] - Task Title
+    local pr_title="[${ticket}] - ${ticket_title}"
+    
+    echo ""
+    echo "=================================="
+    echo -e "${GREEN}PR Title:${NC} $pr_title"
+    echo "=================================="
+    echo -e "${GREEN}PR Body:${NC}"
+    echo "----------------------------------"
+    echo "$pr_body"
+    echo "----------------------------------"
+    echo ""
+    
+    if [[ "$dry_run" == "true" ]]; then
+        log_info "Dry run mode - PR not created"
+        exit 0
+    fi
+    
+    # Confirm creation
+    read -p "Create this PR? (y/n): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        log_info "PR creation cancelled"
+        exit 0
+    fi
+    
+    # Create the PR
+    create_pr "$pr_title" "$pr_body" "$base_branch" "$draft"
+}
+
+# Run main
+main "$@"
