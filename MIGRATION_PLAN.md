@@ -1,6 +1,6 @@
 # Auto-PR v2: Python Migration Plan
 
-> **Status**: In Progress (Phase 3 next)  
+> **Status**: In Progress (Phase 4 next)  
 > **Created**: 2026-01-30  
 > **Branch**: `feature/python-migration`  
 > **Bash preserved in**: `bash-v1` branch
@@ -11,8 +11,8 @@
 |-------|--------|------------|
 | 1. Project Setup | ✅ Complete | 100% |
 | 2. Domain Layer | ✅ Complete | 100% |
-| 3. Infrastructure | 🔲 Pending | 0% |
-| 4. Application | 🔲 Pending | 0% |
+| 3. Infrastructure | ✅ Complete | 100% |
+| 4. Application | ⏳ Next | 0% |
 | 5. CLI Layer | 🔲 Pending | 0% |
 | 6. Configuration | 🔲 Pending | 0% |
 | 7. Testing | 🔲 Pending | 0% |
@@ -135,7 +135,7 @@ auto_pr/
 
 ---
 
-## Phase 3: Infrastructure Layer (External Integrations)
+## Phase 3: Infrastructure Layer (External Integrations) ✅
 
 ### Architecture
 
@@ -143,18 +143,19 @@ auto_pr/
 auto_pr/
 └── infrastructure/
     ├── __init__.py
+    ├── subprocess_runner.py    # Shared subprocess logic
     ├── ai/
     │   ├── __init__.py
-    │   ├── base.py             # Shared CLI execution logic
-    │   ├── gemini_provider.py
-    │   ├── copilot_provider.py
-    │   └── agent_provider.py
+    │   ├── base.py             # BaseAIProvider class
+    │   ├── gemini.py
+    │   ├── copilot.py
+    │   └── agent.py
     ├── jira/
     │   ├── __init__.py
     │   └── acli_client.py      # Uses `acli` CLI
     ├── git/
     │   ├── __init__.py
-    │   └── git_client.py       # Uses `git` CLI
+    │   └── client.py           # Uses `git` CLI
     └── github/
         ├── __init__.py
         └── gh_client.py        # Uses `gh` CLI
@@ -162,13 +163,13 @@ auto_pr/
 
 ### Tasks
 
-- [ ] 3.1 Implement `GitClientImpl` (extract branch, commits, diff)
-- [ ] 3.2 Implement `AcliJiraClient` (fetch ticket via acli)
-- [ ] 3.3 Implement `GeminiProvider`
-- [ ] 3.4 Implement `CopilotProvider`
-- [ ] 3.5 Implement `AgentProvider`
-- [ ] 3.6 Implement `GhPRClient` (create PR via gh)
-- [ ] 3.7 Add subprocess wrapper with error handling
+- [x] 3.1 Implement `GitClientImpl` (branch, commits, diff, extract_ticket_key)
+- [x] 3.2 Implement `AcliJiraClient` (fetch ticket via acli)
+- [x] 3.3 Implement `GeminiProvider`
+- [x] 3.4 Implement `CopilotProvider`
+- [x] 3.5 Implement `AgentProvider`
+- [x] 3.6 Implement `GhPRClient` (get_pr_template, create_pr)
+- [x] 3.7 Add subprocess wrapper (check_tool_exists, run_command, CommandResult)
 
 ### Decisions
 
@@ -414,8 +415,10 @@ _(None currently - all resolved)_
 ### Session 2 - 2026-01-30
 - **Phase 1 Complete**: Initialized uv project, pyproject.toml, directory structure, CLI entry point
 - **Phase 2 Complete**: Created all domain entities (frozen Pydantic), interfaces (ABC), exceptions
+- **Phase 3 Complete**: Implemented all infrastructure clients (Git, Jira, AI providers, GitHub)
 - Added `SESSION_STATE.md` for async session continuity
 - Note: pytest installation blocked by network/certificate issue (tests written but not run)
+- All CLI tools detected and working: git, gh, gemini, copilot, agent
 
 ### Session 3 - TBD
 - 

@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-**Phase 3: Infrastructure Layer** (next)
+**Phase 4: Application Layer** (next)
 
 ## Progress
 
@@ -12,42 +12,42 @@
 |-------|--------|
 | 1. Project Setup | ✅ Done |
 | 2. Domain Layer | ✅ Done |
-| 3. Infrastructure | ⏳ Next |
-| 4-8. Remaining | 🔲 Pending |
+| 3. Infrastructure | ✅ Done |
+| 4. Application | ⏳ Next |
+| 5-8. Remaining | 🔲 Pending |
 
 ## What's Been Built
 
 ```
 auto_pr/
-├── cli/app.py              # Basic CLI with flags (works: uv run auto-pr --help)
+├── cli/app.py                    # Basic CLI (uv run auto-pr --help)
 ├── domain/
-│   ├── entities/           # JiraTicket, GitContext, PRDescription (frozen)
-│   ├── interfaces/         # AIProvider, JiraClient, GitClient, PRClient (ABC)
-│   └── exceptions.py       # Full error hierarchy with hints
-└── infrastructure/         # Empty - to be implemented
+│   ├── entities/                 # JiraTicket, GitContext, PRDescription
+│   ├── interfaces/               # AIProvider, JiraClient, GitClient, PRClient
+│   └── exceptions.py             # Full error hierarchy
+└── infrastructure/
+    ├── subprocess_runner.py      # check_tool_exists, run_command
+    ├── git/client.py             # GitClientImpl
+    ├── jira/acli_client.py       # AcliJiraClient
+    ├── ai/{gemini,copilot,agent} # AI providers
+    └── github/gh_client.py       # GhPRClient
 ```
 
 ## Next Action
 
-**Phase 3**: Implement infrastructure clients:
-1. `git/client.py` - GitClient (branch, commits, diff)
-2. `jira/acli_client.py` - JiraClient (fetch ticket)
-3. `ai/gemini.py`, `copilot.py`, `agent.py` - AI providers
-4. `github/gh_client.py` - PRClient (create PR)
-
-## Notes
-
-- pytest install blocked by network/certificate issue (tests written, not run)
-- Use `MIGRATION_PLAN.md` for full details
-- Use `docs/` for architecture/style guidelines
+**Phase 4**: Application layer (use cases + services):
+1. `services/prompt_builder.py` - Build AI prompt from ticket + context
+2. `services/ai_selector.py` - Auto-detect or select AI provider
+3. `use_cases/generate_pr.py` - Main use case
+4. `use_cases/compare_ai.py` - --test comparison mode
+5. `use_cases/create_pr.py` - Create PR via gh
 
 ## Quick Commands
 
 ```bash
 cd /Users/caique-maurano/Script/automate-pr
 uv run auto-pr --help
-uv run python -c "from auto_pr.domain import *; print('OK')"
-git log --oneline -5
+uv run python -c "from auto_pr.infrastructure import *; print('OK')"
 ```
 
 ## Branch
