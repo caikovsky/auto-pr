@@ -4,35 +4,34 @@
 
 ## Current Phase
 
-**Phase 1: COMPLETE** | **Phase 2: Domain Layer** (next)
+**Phase 2: COMPLETE** | **Phase 3: Infrastructure Layer** (next)
 
-## Phase 1 Completed
+## Completed
 
-- [x] uv installed
-- [x] pyproject.toml created
-- [x] Directory structure (CLEAN)
-- [x] CLI entry point working (`uv run auto-pr --help`)
+- [x] Phase 1: Project setup (uv, pyproject.toml, CLI)
+- [x] Phase 2: Domain layer (entities, interfaces, exceptions)
+
+## Domain Layer Created
+
+- **Entities**: JiraTicket, GitContext, PRDescription (all frozen/immutable)
+- **Interfaces**: AIProvider, JiraClient, GitClient, PRClient
+- **Exceptions**: Full hierarchy (AutoPRError base, Jira/Git/AI/GitHub errors)
 
 ## Next Action
 
-**Phase 2: Domain Layer** - Create entities and interfaces:
-- `auto_pr/domain/entities/` - JiraTicket, GitContext, PRDescription
-- `auto_pr/domain/interfaces/` - AIProvider, JiraClient, GitClient
-- `auto_pr/domain/exceptions.py` - Error hierarchy
+**Phase 3: Infrastructure Layer** - Implement interfaces:
+- `infrastructure/jira/acli_client.py` - JiraClient using acli
+- `infrastructure/git/client.py` - GitClient using git CLI
+- `infrastructure/ai/` - Gemini, Copilot, Agent providers
+- `infrastructure/github/gh_client.py` - PRClient using gh CLI
 
 ## Key Commands
 
 ```bash
 cd /Users/caique-maurano/Script/automate-pr
-uv run auto-pr --help      # Test CLI
-uv run pytest              # Run tests (none yet)
+uv run auto-pr --help
+uv run python -c "from auto_pr.domain import *; print('OK')"
 ```
-
-## Key Files
-
-- `MIGRATION_PLAN.md` - Full plan
-- `docs/` - Guidelines
-- `auto-pr` - Bash script (keep)
 
 ## Branch
 
