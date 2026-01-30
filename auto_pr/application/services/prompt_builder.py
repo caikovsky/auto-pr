@@ -1,10 +1,28 @@
 """Prompt builder service for AI generation."""
 
+from auto_pr.config.settings import (
+    DEFAULT_OUTPUT_RULES,
+    DEFAULT_PROMPT_INSTRUCTIONS,
+)
 from auto_pr.domain.entities import GitContext, JiraTicket
 
 
 class PromptBuilder:
     """Builds prompts for AI PR description generation."""
+
+    def __init__(
+        self,
+        prompt_instructions: str = DEFAULT_PROMPT_INSTRUCTIONS,
+        output_rules: str = DEFAULT_OUTPUT_RULES,
+    ) -> None:
+        """Initialize with customizable instructions.
+
+        Args:
+            prompt_instructions: What the AI should focus on.
+            output_rules: Formatting requirements for output.
+        """
+        self._prompt_instructions = prompt_instructions
+        self._output_rules = output_rules
 
     def build(
         self,
@@ -38,14 +56,11 @@ class PromptBuilder:
 
     def _build_instruction(self) -> str:
         """Build the main instruction."""
-        return """You are a senior software engineer writing a pull request description.
+        return f"""You are a senior software engineer writing a pull request description.
 Analyze the provided information and generate a clear, professional PR description.
 
 Focus on:
-- What changes were made and why
-- Technical approach taken
-- Key files and areas impacted
-- Any testing considerations"""
+{self._prompt_instructions}"""
 
     def _build_ticket_section(self, ticket: JiraTicket) -> str:
         """Build the Jira ticket section."""
@@ -103,11 +118,6 @@ Replace comments/placeholders with actual content.
 
     def _build_output_requirements(self) -> str:
         """Build output requirements."""
-        return """## OUTPUT REQUIREMENTS
+        return f"""## OUTPUT REQUIREMENTS
 
-- Output ONLY the PR description in markdown format
-- Do NOT include any preamble or explanation
-- Do NOT wrap in code blocks
-- Fill in ALL template sections if a template was provided
-- Be concise but thorough
-- Use professional language"""
+{self._output_rules}"""

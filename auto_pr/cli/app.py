@@ -14,7 +14,7 @@ from auto_pr.application import (
     GeneratePRDescription,
     PromptBuilder,
 )
-from auto_pr.config import load_settings
+from auto_pr.config import Settings, load_settings
 from auto_pr.domain.exceptions import AutoPRError
 from auto_pr.infrastructure import (
     AcliJiraClient,
@@ -66,11 +66,11 @@ def main(
 
         # Comparison mode
         if test:
-            _run_comparison(base_branch, test_dir, verbose)
+            _run_comparison(base_branch, test_dir, verbose, settings)
             return
 
         # Normal mode
-        _run_generate(base_branch, ai_choice, dry_run, draft, update, new, verbose)
+        _run_generate(base_branch, ai_choice, dry_run, draft, update, new, verbose, settings)
 
     except AutoPRError as e:
         console.print(f"[red]Error:[/red] {e.message}")
@@ -90,6 +90,7 @@ def _run_generate(
     force_update: bool,
     force_new: bool,
     verbose: bool,
+    settings: "Settings",
 ) -> None:
     """Run the main PR generation flow."""
     # Build dependencies
@@ -97,7 +98,10 @@ def _run_generate(
     jira_client = AcliJiraClient()
     pr_client = GhPRClient()
     ai_selector = AISelector()
-    prompt_builder = PromptBuilder()
+    prompt_builder = PromptBuilder(
+        prompt_instructions=settings.prompt_instructions,
+        output_rules=settings.output_rules,
+    )
 
     # Get current branch and check for existing PR
     current_branch = git_client.get_current_branch()
@@ -191,14 +195,17 @@ def _run_generate(
             console.print("[dim](created as draft)[/dim]")
 
 
-def _run_comparison(base: str, output_dir: Path | None, verbose: bool) -> None:
+def _run_comparison(base: str, output_dir: Path | None, verbose: bool, settings: Settings) -> None:
     """Run the AI comparison flow."""
     # Build dependencies
     git_client = GitClientImpl()
     jira_client = AcliJiraClient()
     pr_client = GhPRClient()
     ai_selector = AISelector()
-    prompt_builder = PromptBuilder()
+    prompt_builder = PromptBuilder(
+        prompt_instructions=settings.prompt_instructions,
+        output_rules=settings.output_rules,
+    )
 
     # Create use case
     compare_uc = CompareAIOutputs(

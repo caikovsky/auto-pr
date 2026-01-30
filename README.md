@@ -172,6 +172,44 @@ base_branch = "main"
 
 # Jira instance URL
 jira_base_url = "https://your-company.atlassian.net"
+
+# Prompt instructions - what the AI should focus on
+prompt_instructions = """
+- What changes were made and why
+- Technical approach taken
+- Key files and areas impacted
+- Any testing considerations
+"""
+
+# Output rules - formatting requirements
+output_rules = """
+- Output ONLY the PR description in markdown format
+- Do NOT include any preamble or explanation
+- Do NOT wrap in code blocks
+- Fill in ALL template sections if a template was provided
+- Be concise but thorough
+- Use professional language
+"""
+```
+
+### Customizing the AI Prompt
+
+You can customize how the AI generates PR descriptions by editing the config file:
+
+```toml
+# Example: Lean, no-nonsense style
+prompt_instructions = """
+- Keep it brief, max 3 bullet points per section
+- Focus on the "why", not the "what"
+- No fluff or filler words
+"""
+
+output_rules = """
+- Output ONLY markdown, no preamble
+- Max 200 words total
+- No emojis
+- Avoid phrases like "This PR", "In this change"
+"""
 ```
 
 ## Branch Naming Convention
