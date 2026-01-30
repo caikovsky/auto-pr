@@ -15,6 +15,9 @@ NC='\033[0m' # No Color
 CONFIG_DIR="${HOME}/.config/auto-pr"
 CONFIG_FILE="${CONFIG_DIR}/config"
 
+# AI CLI tool to use (gemini, llm, mods, ollama, or anthropic)
+AI_CLI="${AI_CLI:-auto}"
+
 #######################################
 # Utility Functions
 #######################################
@@ -58,29 +61,74 @@ save_config() {
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_FILE" << EOF
 # Auto-PR Configuration
-GEMINI_API_KEY="$GEMINI_API_KEY"
+# AI CLI tool: gemini, llm, mods, ollama, claude, or anthropic
+AI_CLI="${AI_CLI:-auto}"
 EOF
     chmod 600 "$CONFIG_FILE"
 }
 
-setup_api_key() {
+detect_ai_cli() {
+    # Check for available AI CLI tools in order of preference
+    if [[ "$AI_CLI" != "auto" ]] && command -v "$AI_CLI" &>/dev/null; then
+        echo "$AI_CLI"
+        return 0
+    fi
+    
+    # Auto-detect available CLI
+    if command -v gemini &>/dev/null; then
+        echo "gemini"
+    elif command -v claude &>/dev/null; then
+        echo "claude"
+    elif command -v llm &>/dev/null; then
+        echo "llm"
+    elif command -v mods &>/dev/null; then
+        echo "mods"
+    elif command -v ollama &>/dev/null; then
+        echo "ollama"
+    else
+        echo ""
+    fi
+}
+
+setup_ai_cli() {
     echo "Auto-PR Setup"
     echo "============="
     echo ""
-    echo "This tool uses Google Gemini AI to analyze your code changes."
-    echo ""
-    echo "Get your free API key from:"
-    echo "  https://aistudio.google.com/app/apikey"
-    echo ""
-    read -p "Enter your Gemini API key: " api_key
+    echo "Detected AI CLI tools:"
     
-    if [[ -z "$api_key" ]]; then
-        die "API key is required"
+    local found=false
+    command -v gemini &>/dev/null && echo "  ✓ gemini (Google Gemini CLI)" && found=true
+    command -v claude &>/dev/null && echo "  ✓ claude (Anthropic Claude CLI)" && found=true
+    command -v llm &>/dev/null && echo "  ✓ llm (Simon Willison's LLM CLI)" && found=true
+    command -v mods &>/dev/null && echo "  ✓ mods (Charmbracelet Mods)" && found=true
+    command -v ollama &>/dev/null && echo "  ✓ ollama (Local Ollama)" && found=true
+    
+    if [[ "$found" == false ]]; then
+        echo "  ✗ No AI CLI tools found"
+        echo ""
+        echo "Install one of:"
+        echo "  brew install gemini-cli    # Google Gemini"
+        echo "  brew install llm           # Simon Willison's LLM"
+        echo "  brew install mods          # Charmbracelet Mods"
+        echo "  brew install ollama        # Local models"
+        exit 1
     fi
     
-    GEMINI_API_KEY="$api_key"
+    echo ""
+    local detected
+    detected=$(detect_ai_cli)
+    echo "Auto-detected: $detected"
+    echo ""
+    read -p "Use '$detected'? (y/n or enter different CLI name): " choice
+    
+    if [[ "$choice" == "y" || "$choice" == "Y" || -z "$choice" ]]; then
+        AI_CLI="$detected"
+    else
+        AI_CLI="$choice"
+    fi
+    
     save_config
-    log_success "Configuration saved to $CONFIG_FILE"
+    log_success "Configuration saved. Using: $AI_CLI"
 }
 
 #######################################
@@ -124,12 +172,18 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check for API key
+    # Check for AI CLI
     load_config
-    if [[ -z "$GEMINI_API_KEY" ]]; then
-        log_warning "Gemini API key not configured."
-        setup_api_key
+    DETECTED_AI_CLI=$(detect_ai_cli)
+    
+    if [[ -z "$DETECTED_AI_CLI" ]]; then
+        log_error "No AI CLI tool found."
+        log_info "Install one of: gemini, claude, llm, mods, or ollama"
+        log_info "Example: brew install gemini-cli"
+        exit 1
     fi
+    
+    log_info "Using AI CLI: $DETECTED_AI_CLI"
 }
 
 #######################################
@@ -322,43 +376,47 @@ get_diff_stat() {
 }
 
 #######################################
-# AI Analysis with Gemini
+# AI Analysis with CLI Tools
 #######################################
 
-call_gemini_api() {
+call_ai_cli() {
     local prompt="$1"
+    local cli_tool="$2"
     
-    local request_body
-    request_body=$(jq -n \
-        --arg prompt "$prompt" \
-        '{
-            contents: [{
-                parts: [{
-                    text: $prompt
-                }]
-            }],
-            generationConfig: {
-                temperature: 0.3,
-                maxOutputTokens: 2048
-            }
-        }')
+    local response=""
     
-    local response
-    response=$(curl -s -X POST \
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "$request_body" 2>&1)
+    case "$cli_tool" in
+        gemini)
+            # Use gemini CLI - pipe prompt and get text output
+            response=$(echo "$prompt" | gemini -o text 2>/dev/null)
+            ;;
+        claude)
+            # Anthropic Claude CLI
+            response=$(echo "$prompt" | claude --print 2>/dev/null)
+            ;;
+        llm)
+            # Simon Willison's LLM CLI
+            response=$(echo "$prompt" | llm 2>/dev/null)
+            ;;
+        mods)
+            # Charmbracelet Mods
+            response=$(echo "$prompt" | mods 2>/dev/null)
+            ;;
+        ollama)
+            # Ollama with default model
+            response=$(echo "$prompt" | ollama run llama3.2 2>/dev/null)
+            ;;
+        *)
+            log_error "Unknown AI CLI: $cli_tool"
+            return 1
+            ;;
+    esac
     
-    # Check for errors
-    if echo "$response" | jq -e '.error' &>/dev/null; then
-        local error_msg
-        error_msg=$(echo "$response" | jq -r '.error.message // "Unknown error"')
-        log_error "Gemini API error: $error_msg"
+    if [[ -z "$response" ]]; then
         return 1
     fi
     
-    # Extract the text response
-    echo "$response" | jq -r '.candidates[0].content.parts[0].text // ""'
+    echo "$response"
 }
 
 generate_ai_pr_description() {
@@ -371,9 +429,9 @@ generate_ai_pr_description() {
     local changed_files="$7"
     local diff_content="$8"
     local diff_stat="$9"
-    local template_content="${10}"
+    local ai_cli="${10}"
     
-    log_ai "Analyzing code changes with AI..."
+    log_ai "Analyzing code changes with $ai_cli..."
     
     # Build the prompt
     local prompt="You are an expert code reviewer helping create a Pull Request description.
@@ -437,13 +495,10 @@ Generate the PR description in this exact markdown format:
 ## Jira Ticket
 ${ticket_url}
 
----
-*This description was generated with AI assistance based on the code diff and Jira ticket.*
-
 IMPORTANT: Be specific and reference actual code, files, and functions from the diff. Don't be generic."
 
     local ai_response
-    ai_response=$(call_gemini_api "$prompt")
+    ai_response=$(call_ai_cli "$prompt" "$ai_cli")
     
     if [[ $? -ne 0 ]] || [[ -z "$ai_response" ]]; then
         log_warning "AI generation failed, falling back to basic template"
@@ -595,7 +650,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --setup)
-                setup_api_key
+                setup_ai_cli
                 exit 0
                 ;;
             --setup-help)
@@ -712,7 +767,7 @@ Expected format: task/PROJ-123 or feature/PROJ-123-description"
         "$changed_files" \
         "$diff_content" \
         "$diff_stat" \
-        "")
+        "$DETECTED_AI_CLI")
     
     # Merge with template if exists
     local pr_body

@@ -63,6 +63,15 @@ https://company.atlassian.net/browse/PROJ-123
 brew install gh jq
 brew install atlassian-labs/tap/acli
 
+# Install an AI CLI (any one of these)
+brew install gemini-cli   # Google Gemini (recommended)
+# OR
+brew install llm          # Simon Willison's LLM
+# OR  
+brew install mods         # Charmbracelet Mods
+# OR
+brew install ollama       # Local models
+
 # Authenticate
 gh auth login
 acli auth login
@@ -70,19 +79,19 @@ acli auth login
 
 ## Setup
 
-### 1. Get Gemini API Key (Free)
+The tool auto-detects installed AI CLI tools. Supported:
 
-1. Go to: https://aistudio.google.com/app/apikey
-2. Click "Create API Key"
-3. Copy the key
+| CLI | Install | Notes |
+|-----|---------|-------|
+| `gemini` | `brew install gemini-cli` | Google Gemini (recommended) |
+| `claude` | Anthropic CLI | Claude models |
+| `llm` | `brew install llm` | Multiple providers |
+| `mods` | `brew install mods` | Charmbracelet |
+| `ollama` | `brew install ollama` | Local models |
 
-### 2. Configure auto-pr
-
+Run setup to see detected tools:
 ```bash
-# Run setup
-./auto-pr --setup
-
-# Enter your Gemini API key when prompted
+auto-pr --setup
 ```
 
 ### 3. Add to PATH
@@ -156,14 +165,16 @@ The tool extracts Jira tickets from branch names:
 Config is stored at `~/.config/auto-pr/config`:
 
 ```bash
-GEMINI_API_KEY="your-api-key"
+AI_CLI="gemini"  # or claude, llm, mods, ollama
 ```
 
 ## Troubleshooting
 
-### "Gemini API error"
-- Verify your API key: `cat ~/.config/auto-pr/config`
-- Re-run setup: `auto-pr --setup`
+### "No AI CLI tool found"
+Install one of the supported AI CLIs:
+```bash
+brew install gemini-cli
+```
 
 ### "Atlassian CLI is not authenticated"
 ```bash
