@@ -4,35 +4,52 @@
 
 ## Current Phase
 
-**Phase 2: COMPLETE** | **Phase 3: Infrastructure Layer** (next)
+**Phase 3: Infrastructure Layer** (next)
 
-## Completed
+## Progress
 
-- [x] Phase 1: Project setup (uv, pyproject.toml, CLI)
-- [x] Phase 2: Domain layer (entities, interfaces, exceptions)
+| Phase | Status |
+|-------|--------|
+| 1. Project Setup | ✅ Done |
+| 2. Domain Layer | ✅ Done |
+| 3. Infrastructure | ⏳ Next |
+| 4-8. Remaining | 🔲 Pending |
 
-## Domain Layer Created
+## What's Been Built
 
-- **Entities**: JiraTicket, GitContext, PRDescription (all frozen/immutable)
-- **Interfaces**: AIProvider, JiraClient, GitClient, PRClient
-- **Exceptions**: Full hierarchy (AutoPRError base, Jira/Git/AI/GitHub errors)
+```
+auto_pr/
+├── cli/app.py              # Basic CLI with flags (works: uv run auto-pr --help)
+├── domain/
+│   ├── entities/           # JiraTicket, GitContext, PRDescription (frozen)
+│   ├── interfaces/         # AIProvider, JiraClient, GitClient, PRClient (ABC)
+│   └── exceptions.py       # Full error hierarchy with hints
+└── infrastructure/         # Empty - to be implemented
+```
 
 ## Next Action
 
-**Phase 3: Infrastructure Layer** - Implement interfaces:
-- `infrastructure/jira/acli_client.py` - JiraClient using acli
-- `infrastructure/git/client.py` - GitClient using git CLI
-- `infrastructure/ai/` - Gemini, Copilot, Agent providers
-- `infrastructure/github/gh_client.py` - PRClient using gh CLI
+**Phase 3**: Implement infrastructure clients:
+1. `git/client.py` - GitClient (branch, commits, diff)
+2. `jira/acli_client.py` - JiraClient (fetch ticket)
+3. `ai/gemini.py`, `copilot.py`, `agent.py` - AI providers
+4. `github/gh_client.py` - PRClient (create PR)
 
-## Key Commands
+## Notes
+
+- pytest install blocked by network/certificate issue (tests written, not run)
+- Use `MIGRATION_PLAN.md` for full details
+- Use `docs/` for architecture/style guidelines
+
+## Quick Commands
 
 ```bash
 cd /Users/caique-maurano/Script/automate-pr
 uv run auto-pr --help
 uv run python -c "from auto_pr.domain import *; print('OK')"
+git log --oneline -5
 ```
 
 ## Branch
 
-`feature/python-migration`
+`feature/python-migration` on `caikovsky/auto-pr`
