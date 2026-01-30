@@ -4,44 +4,40 @@
 
 ## Current Status
 
-**MIGRATION COMPLETE** - Ready for PR to main
+**MIGRATION COMPLETE + ENHANCEMENTS** - PR #2 open for review
 
-## Progress
+## Features Implemented
 
-| Phase | Status |
-|-------|--------|
-| 1. Project Setup | ✅ Done |
-| 2. Domain Layer | ✅ Done |
-| 3. Infrastructure | ✅ Done |
-| 4. Application | ✅ Done |
-| 5. CLI Layer | ✅ Done |
-| 6. Configuration | ✅ Done |
-| 7. Testing | ✅ Done |
-| 8. Documentation | ✅ Done |
+- ✅ Full Python CLI (`autopr`)
+- ✅ AI providers: Gemini, Copilot, Agent
+- ✅ PR update support (detect existing, prompt user)
+- ✅ Prompt customization via config file
+- ✅ All 8 migration phases complete
 
-## What's Working
+## Key Commands
 
 ```bash
 uv run autopr --help           # Full CLI
-uv run autopr --dry-run        # Generate without creating PR
+uv run autopr --dry-run        # Preview
+uv run autopr --update         # Update existing PR
 uv run autopr --test           # Compare AI providers
 ```
 
-## Next Action
+## Config File
 
-**Create PR** to merge `feature/python-migration` into `main`:
-- All 8 phases complete
-- CLI functional with all flags
-- README updated
-- Config file support added
+`~/.config/autopr/config.toml` - single source of truth for:
+- AI provider preference
+- Base branch
+- Prompt instructions (customizable)
+- Output rules (customizable)
 
-## Quick Test
+## Design Rules
 
-```bash
-cd /Users/caique-maurano/Script/automate-pr
-uv run autopr --help
-```
+- **Single source of truth**: Config file, no hardcoded fallbacks
+- **User choice**: Always prompt before destructive actions
+- **Immutable entities**: All domain models are frozen
 
 ## Branch
 
 `feature/python-migration` on `caikovsky/auto-pr`
+PR #2: https://github.com/caikovsky/auto-pr/pull/2

@@ -52,6 +52,8 @@ Migrate `autopr` from a bash script to a Python CLI application using CLEAN arch
 - **Immutable data**: All entities are frozen (read-only after creation)
 - **Read-only Jira**: Only fetch data, never modify remote
 - **CLEAN architecture**: Domain has no external dependencies
+- **Single source of truth**: Config file for all defaults, no hardcoded fallbacks
+- **User choice**: Always prompt before destructive/ambiguous actions
 
 ---
 
@@ -414,8 +416,19 @@ _(None currently - all resolved)_
 - **Phase 7 Complete**: Test fixtures and configuration ready
 - **Phase 8 Complete**: README updated for Python version
 - Added `SESSION_STATE.md` for async session continuity
-- **MIGRATION COMPLETE** - Ready for PR to merge to main
+- **MIGRATION COMPLETE** - PR #2 created using the tool itself!
+
+### Session 2 (continued) - 2026-01-30
+Post-migration enhancements:
+- **PR Update Support**: Auto-detect existing PR, prompt user to update or create new
+- **New flags**: `--update` / `-u` and `--new` for skipping prompt
+- **Prompt Customization**: `prompt_instructions` and `output_rules` in config
+- **Single Source of Truth**: Removed hardcoded defaults, config file is the only source
+- **Jira Optional**: Tool works on branches without Jira ticket (warns but continues)
+- Renamed CLI from `auto-pr` to `autopr` for consistency
+- Deleted old bash script from repo
 
 ### Session 3 - TBD
-- Create PR to merge feature/python-migration to main
+- Merge PR #2 to main
+- Test global install with pipx
 

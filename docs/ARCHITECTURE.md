@@ -304,6 +304,47 @@ User Input (CLI)
 
 ---
 
+## Configuration Principles
+
+### Single Source of Truth
+
+All configuration defaults live in **one place**: `DEFAULT_CONFIG` in `config/settings.py`.
+
+```python
+# ✓ GOOD - One source
+DEFAULT_CONFIG = '''
+ai_provider = "auto"
+prompt_instructions = "..."
+'''
+
+# Config file auto-created from DEFAULT_CONFIG if missing
+def load_settings() -> Settings:
+    config_path = _ensure_config_exists()  # Creates from DEFAULT_CONFIG
+    return Settings(**tomllib.load(config_path))
+```
+
+```python
+# ✗ BAD - Multiple sources (hardcoded fallbacks)
+class Settings:
+    prompt_instructions: str = "default here"  # NO! Duplicates DEFAULT_CONFIG
+```
+
+### User Choice
+
+Always prompt before ambiguous or potentially destructive actions:
+
+```python
+# ✓ GOOD - Ask user
+if existing_pr and not force_update:
+    choice = typer.prompt("[U]pdate or [N]ew?", default="U")
+
+# ✗ BAD - Assume behavior
+if existing_pr:
+    update_pr(existing_pr)  # User didn't consent!
+```
+
+---
+
 ## Rules Summary
 
 | Rule | Description |
@@ -314,3 +355,5 @@ User Input (CLI)
 | **Dependency Inversion** | Depend on interfaces, not implementations |
 | **Single Responsibility** | One reason to change per class |
 | **Composition Root** | Wire dependencies in CLI only |
+| **Single Source of Truth** | Config file for defaults, no hardcoded fallbacks |
+| **User Choice** | Prompt before ambiguous/destructive actions |
