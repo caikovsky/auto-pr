@@ -14,6 +14,7 @@ from auto_pr.application import (
     GeneratePRDescription,
     PromptBuilder,
 )
+from auto_pr.config import load_settings
 from auto_pr.domain.exceptions import AutoPRError
 from auto_pr.infrastructure import (
     AcliJiraClient,
@@ -42,7 +43,7 @@ def _get_ai_choice(gemini: bool, copilot: bool, agent: bool) -> str | None:
 def main(
     dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Preview without creating PR")] = False,
     draft: Annotated[bool, typer.Option("--draft", "-d", help="Create as draft PR")] = False,
-    base: Annotated[str, typer.Option("--base", "-b", help="Base branch for PR")] = "main",
+    base: Annotated[str | None, typer.Option("--base", "-b", help="Base branch for PR")] = None,
     gemini: Annotated[bool, typer.Option("--gemini", help="Use Gemini AI")] = False,
     copilot: Annotated[bool, typer.Option("--copilot", help="Use GitHub Copilot")] = False,
     agent: Annotated[bool, typer.Option("--agent", help="Use Cursor Agent")] = False,
@@ -52,14 +53,22 @@ def main(
 ) -> None:
     """Generate and create a PR with AI-powered description."""
     try:
+        # Load config
+        settings = load_settings()
+
+        # Use config defaults if not specified
+        base_branch = base or settings.base_branch
+        ai_choice = _get_ai_choice(gemini, copilot, agent) or (
+            None if settings.ai_provider == "auto" else settings.ai_provider
+        )
+
         # Comparison mode
         if test:
-            _run_comparison(base, test_dir, verbose)
+            _run_comparison(base_branch, test_dir, verbose)
             return
 
         # Normal mode
-        ai_choice = _get_ai_choice(gemini, copilot, agent)
-        _run_generate(base, ai_choice, dry_run, draft, verbose)
+        _run_generate(base_branch, ai_choice, dry_run, draft, verbose)
 
     except AutoPRError as e:
         console.print(f"[red]Error:[/red] {e.message}")

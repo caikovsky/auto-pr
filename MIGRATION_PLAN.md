@@ -1,6 +1,6 @@
 # Auto-PR v2: Python Migration Plan
 
-> **Status**: In Progress (Phase 4 next)  
+> **Status**: In Progress (Phase 6 next)  
 > **Created**: 2026-01-30  
 > **Branch**: `feature/python-migration`  
 > **Bash preserved in**: `bash-v1` branch
@@ -12,9 +12,9 @@
 | 1. Project Setup | ✅ Complete | 100% |
 | 2. Domain Layer | ✅ Complete | 100% |
 | 3. Infrastructure | ✅ Complete | 100% |
-| 4. Application | ⏳ Next | 0% |
-| 5. CLI Layer | 🔲 Pending | 0% |
-| 6. Configuration | 🔲 Pending | 0% |
+| 4. Application | ✅ Complete | 100% |
+| 5. CLI Layer | ✅ Complete | 100% |
+| 6. Configuration | ⏳ Next | 0% |
 | 7. Testing | 🔲 Pending | 0% |
 | 8. Documentation | 🔲 Pending | 0% |
 
@@ -187,7 +187,7 @@ auto_pr/
 
 ---
 
-## Phase 4: Application Layer (Use Cases)
+## Phase 4: Application Layer (Use Cases) ✅
 
 ### Architecture
 
@@ -198,8 +198,8 @@ auto_pr/
     ├── use_cases/
     │   ├── __init__.py
     │   ├── generate_pr.py          # Main use case
-    │   ├── compare_ai_outputs.py   # --test flag
-    │   └── create_pull_request.py  # gh pr create
+    │   ├── compare_ai.py           # --test flag
+    │   └── create_pr.py            # gh pr create
     └── services/
         ├── __init__.py
         ├── prompt_builder.py       # Build AI prompt
@@ -208,11 +208,11 @@ auto_pr/
 
 ### Tasks
 
-- [ ] 4.1 Implement `PromptBuilder` service
-- [ ] 4.2 Implement `AISelector` service (auto-detect, explicit selection)
-- [ ] 4.3 Implement `GeneratePRDescription` use case
-- [ ] 4.4 Implement `CompareAIOutputs` use case
-- [ ] 4.5 Implement `CreatePullRequest` use case
+- [x] 4.1 Implement `PromptBuilder` service
+- [x] 4.2 Implement `AISelector` service (auto-detect, explicit selection)
+- [x] 4.3 Implement `GeneratePRDescription` use case
+- [x] 4.4 Implement `CompareAIOutputs` use case
+- [x] 4.5 Implement `CreatePullRequest` use case
 
 ### Decisions
 
@@ -230,7 +230,7 @@ auto_pr/
 
 ---
 
-## Phase 5: CLI Layer (Presentation)
+## Phase 5: CLI Layer (Presentation) ✅
 
 ### Architecture
 
@@ -240,27 +240,19 @@ auto_pr/
 ├── __main__.py          # python -m auto_pr
 └── cli/
     ├── __init__.py
-    ├── app.py           # Typer app definition
-    ├── commands/
-    │   ├── __init__.py
-    │   ├── generate.py  # Main command (default)
-    │   └── test.py      # --test comparison
-    └── output/
-        ├── __init__.py
-        ├── console.py   # Rich console output
-        └── files.py     # File output for --test
+    └── app.py           # Typer app with all commands
 ```
 
 ### Tasks
 
-- [ ] 5.1 Create Typer app with main command
-- [ ] 5.2 Implement `--gemini`, `--copilot`, `--agent` flags
-- [ ] 5.3 Implement `--dry-run` flag
-- [ ] 5.4 Implement `--draft` flag
-- [ ] 5.5 Implement `--base` option
-- [ ] 5.6 Implement `--test` command
-- [ ] 5.7 Add Rich console output (colors, progress)
-- [ ] 5.8 Add shell completion support
+- [x] 5.1 Create Typer app with main command
+- [x] 5.2 Implement `--gemini`, `--copilot`, `--agent` flags
+- [x] 5.3 Implement `--dry-run` flag
+- [x] 5.4 Implement `--draft` flag
+- [x] 5.5 Implement `--base` option
+- [x] 5.6 Implement `--test` command with `--test-dir`
+- [x] 5.7 Add Rich console output (panels, colors)
+- [x] 5.8 Shell completion via Typer (built-in)
 
 ### Decisions
 
@@ -416,9 +408,11 @@ _(None currently - all resolved)_
 - **Phase 1 Complete**: Initialized uv project, pyproject.toml, directory structure, CLI entry point
 - **Phase 2 Complete**: Created all domain entities (frozen Pydantic), interfaces (ABC), exceptions
 - **Phase 3 Complete**: Implemented all infrastructure clients (Git, Jira, AI providers, GitHub)
+- **Phase 4 Complete**: Application layer with services (PromptBuilder, AISelector) and use cases
+- **Phase 5 Complete**: Full CLI with all flags, Rich output, error handling with hints
 - Added `SESSION_STATE.md` for async session continuity
 - Note: pytest installation blocked by network/certificate issue (tests written but not run)
-- All CLI tools detected and working: git, gh, gemini, copilot, agent
+- CLI tested: `auto-pr --help` works, `--dry-run` shows proper error for non-Jira branches
 
 ### Session 3 - TBD
 - 
