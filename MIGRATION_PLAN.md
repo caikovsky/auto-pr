@@ -1,9 +1,22 @@
 # Auto-PR v2: Python Migration Plan
 
-> **Status**: Planning  
+> **Status**: In Progress (Phase 3 next)  
 > **Created**: 2026-01-30  
 > **Branch**: `feature/python-migration`  
 > **Bash preserved in**: `bash-v1` branch
+
+### Progress
+
+| Phase | Status | Completion |
+|-------|--------|------------|
+| 1. Project Setup | ✅ Complete | 100% |
+| 2. Domain Layer | ✅ Complete | 100% |
+| 3. Infrastructure | 🔲 Pending | 0% |
+| 4. Application | 🔲 Pending | 0% |
+| 5. CLI Layer | 🔲 Pending | 0% |
+| 6. Configuration | 🔲 Pending | 0% |
+| 7. Testing | 🔲 Pending | 0% |
+| 8. Documentation | 🔲 Pending | 0% |
 
 ---
 
@@ -14,11 +27,11 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 ### Goals
 
 - [ ] Same CLI interface as bash version
-- [ ] CLEAN architecture (maintainable by AI and humans)
+- [x] CLEAN architecture (maintainable by AI and humans)
 - [ ] Type-safe with full mypy coverage
 - [ ] Testable with pytest
 - [ ] Installable via pipx
-- [ ] Extensible for new AI providers
+- [x] Extensible for new AI providers
 
 ### Tech Stack
 
@@ -42,15 +55,15 @@ Migrate `auto-pr` from a bash script to a Python CLI application using CLEAN arc
 
 ---
 
-## Phase 1: Project Setup
+## Phase 1: Project Setup ✅
 
 ### Tasks
 
-- [ ] 1.1 Create Python project structure
-- [ ] 1.2 Configure `pyproject.toml` with uv
-- [ ] 1.3 Set up development dependencies (pytest, mypy, ruff)
-- [ ] 1.4 Create basic CLI entry point
-- [ ] 1.5 Verify `pipx install .` works
+- [x] 1.1 Create Python project structure
+- [x] 1.2 Configure `pyproject.toml` with uv
+- [x] 1.3 Set up development dependencies (pytest, mypy, ruff)
+- [x] 1.4 Create basic CLI entry point
+- [ ] 1.5 Verify `pipx install .` works (deferred to Phase 8)
 
 ### Decisions
 
@@ -71,7 +84,7 @@ auto-pr --version
 
 ---
 
-## Phase 2: Domain Layer (Core Business Logic)
+## Phase 2: Domain Layer (Core Business Logic) ✅
 
 ### Architecture
 
@@ -83,54 +96,27 @@ auto_pr/
     │   ├── __init__.py
     │   ├── jira_ticket.py      # JiraTicket (Pydantic, frozen)
     │   ├── git_context.py      # GitContext (Pydantic, frozen)
-    │   ├── pr_description.py   # PRDescription (Pydantic, frozen)
-    │   └── ai_result.py        # AIResult (Pydantic, frozen)
-    └── interfaces/
-        ├── __init__.py
-        ├── ai_provider.py      # Abstract AIProvider
-        ├── jira_client.py      # Abstract JiraClient (read-only)
-        ├── git_client.py       # Abstract GitClient (read-only)
-        └── pr_client.py        # Abstract PRClient (GitHub)
-```
-
-### Example Entity (Pydantic Frozen Model)
-
-```python
-from pydantic import BaseModel, Field, ConfigDict
-
-class JiraTicket(BaseModel):
-    """Jira ticket data (read-only)."""
-    
-    model_config = ConfigDict(frozen=True)  # Immutable
-    
-    key: str = Field(pattern=r'^[A-Z]+-\d+$')
-    title: str
-    description: str
-    ticket_type: str
-    url: str
-    
-    @classmethod
-    def from_acli_response(cls, data: dict) -> "JiraTicket":
-        """Parse from acli JSON response."""
-        return cls(
-            key=data["key"],
-            title=data["fields"]["summary"],
-            description=cls._extract_description(data["fields"]["description"]),
-            ticket_type=data["fields"]["issuetype"]["name"],
-            url=f"https://..."
-        )
+    │   └── pr_description.py   # PRDescription (Pydantic, frozen)
+    ├── interfaces/
+    │   ├── __init__.py
+    │   ├── ai_provider.py      # Abstract AIProvider
+    │   ├── jira_client.py      # Abstract JiraClient (read-only)
+    │   ├── git_client.py       # Abstract GitClient (read-only)
+    │   └── pr_client.py        # Abstract PRClient (GitHub)
+    └── exceptions.py           # Custom exception hierarchy
 ```
 
 ### Tasks
 
-- [ ] 2.1 Define `JiraTicket` entity
-- [ ] 2.2 Define `GitContext` entity (branch, commits, diff, changed files)
-- [ ] 2.3 Define `PRDescription` entity
-- [ ] 2.4 Define `AIResult` entity (for comparison testing)
-- [ ] 2.5 Define `AIProvider` interface (abstract base class)
-- [ ] 2.6 Define `JiraClient` interface
-- [ ] 2.7 Define `GitClient` interface
-- [ ] 2.8 Define `PRClient` interface
+- [x] 2.1 Define `JiraTicket` entity (with `from_acli_response` factory)
+- [x] 2.2 Define `GitContext` entity (branch, commits, diff, changed files)
+- [x] 2.3 Define `PRDescription` entity
+- [x] 2.4 ~~Define `AIResult` entity~~ (merged into PRDescription with ai_provider field)
+- [x] 2.5 Define `AIProvider` interface (name, is_available, generate)
+- [x] 2.6 Define `JiraClient` interface (fetch)
+- [x] 2.7 Define `GitClient` interface (get_current_branch, get_context, extract_ticket_key)
+- [x] 2.8 Define `PRClient` interface (get_pr_template, create_pr)
+- [x] 2.9 Define exception hierarchy (AutoPRError, Jira/Git/AI/GitHub errors)
 
 ### Decisions
 
@@ -422,7 +408,15 @@ _(None currently - all resolved)_
 - Created migration plan
 - Set up branch structure (`bash-v1`, `feature/python-migration`)
 - Defined tech stack and phases
+- Created `docs/` folder with guidelines (ARCHITECTURE, ERROR_HANDLING, TESTING, STYLE_GUIDE)
+- Resolved all open questions for tech decisions
 
-### Session 2 - TBD
+### Session 2 - 2026-01-30
+- **Phase 1 Complete**: Initialized uv project, pyproject.toml, directory structure, CLI entry point
+- **Phase 2 Complete**: Created all domain entities (frozen Pydantic), interfaces (ABC), exceptions
+- Added `SESSION_STATE.md` for async session continuity
+- Note: pytest installation blocked by network/certificate issue (tests written but not run)
+
+### Session 3 - TBD
 - 
 
