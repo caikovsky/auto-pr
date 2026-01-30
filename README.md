@@ -1,128 +1,155 @@
-# Auto-PR: AI-Powered Pull Request Generator
+# auto-pr
 
-A CLI tool that uses **AI** to automatically create intelligent GitHub Pull Requests. It analyzes your code changes, compares them to Jira ticket requirements, and generates comprehensive PR descriptions.
+AI-powered Pull Request creation tool. Automatically generates PR descriptions using AI based on your Jira ticket and git changes.
 
-## Supported AI CLIs
+## Features
 
-| CLI | Command | Description |
-|-----|---------|-------------|
-| **Gemini** | `gemini` | Google Gemini CLI |
-| **Copilot** | `copilot` | GitHub Copilot CLI |
-| **Agent** | `agent` | Cursor Agent CLI |
+- **AI-Powered Descriptions**: Uses Gemini, GitHub Copilot, or Cursor Agent to generate insightful PR descriptions
+- **Jira Integration**: Automatically fetches ticket details from Jira via Atlassian CLI
+- **Git Context**: Analyzes commits, changed files, and diffs to provide technical context
+- **PR Template Support**: Fills your repository's PR template automatically
+- **Multiple AI Providers**: Choose between Gemini, Copilot, or Agent (or let it auto-detect)
+- **Comparison Mode**: Compare outputs from all AI providers side-by-side
 
-## Prerequisites
+## Installation
+
+### Prerequisites
+
+- Python 3.12+
+- [uv](https://github.com/astral-sh/uv) package manager
+- [Atlassian CLI (acli)](https://www.atlassian.com/software/cli) - for Jira integration
+- [GitHub CLI (gh)](https://cli.github.com/) - for PR creation
+- At least one AI CLI: `gemini`, `copilot`, or `agent`
+
+### Install
 
 ```bash
-# Core tools
-brew install gh jq
-brew install atlassian-labs/tap/acli
+# Clone the repository
+git clone https://github.com/caikovsky/auto-pr.git
+cd auto-pr
 
-# AI CLI (at least one)
-brew install gemini-cli    # Google Gemini
-```
+# Install with uv
+uv sync
 
-## Setup
-
-```bash
-# Authenticate
-gh auth login
-acli auth login
-
-# Add to PATH (in ~/.zshrc)
-export PATH="$PATH:/path/to/automate-pr"
-source ~/.zshrc
+# Or install globally with pipx
+pipx install .
 ```
 
 ## Usage
 
-```bash
-cd /path/to/your/repo
-git checkout task/TLAB-2023
-
-# Auto-detect AI CLI
-auto-pr --dry-run    # Preview AI-generated PR
-auto-pr              # Create PR
-
-# Choose specific AI CLI
-auto-pr --gemini     # Use Gemini
-auto-pr --copilot    # Use GitHub Copilot
-auto-pr --agent      # Use Cursor Agent
-
-# Combine with other flags
-auto-pr --gemini --dry-run
-auto-pr --agent --draft
-```
-
-## Options
-
-| Option | Description |
-|--------|-------------|
-| `--gemini` | Use Google Gemini CLI |
-| `--copilot` | Use GitHub Copilot CLI |
-| `--agent` | Use Cursor Agent CLI |
-| `--dry-run` | Preview PR without creating |
-| `--draft`, `-d` | Create as draft PR |
-| `--base`, `-b` | Base branch (default: main) |
-| `--test [dir]` | Compare outputs from all AI CLIs |
-| `--setup` | Configure default AI CLI |
-| `--help`, `-h` | Show help |
-
-## AI Comparison Testing
-
-Compare results from different AI CLIs to find the best one:
+### Basic Usage
 
 ```bash
-auto-pr --test                    # Saves to ./auto-pr-test-TIMESTAMP/
-auto-pr --test ./my-test-results  # Custom directory
+# Generate and create a PR (auto-detects AI provider)
+auto-pr
+
+# Preview without creating PR
+auto-pr --dry-run
+
+# Create as draft PR
+auto-pr --draft
 ```
 
-Creates:
-- `prompt.txt` - The prompt sent to all AIs
-- `gemini_output.txt` - Output from Gemini
-- `copilot_output.txt` - Output from Copilot
-- `agent_output.txt` - Output from Cursor Agent
-- `summary.md` - Comparison with timing and word counts
+### AI Provider Selection
 
-Compare outputs:
 ```bash
-diff -y ./results/gemini_output.txt ./results/copilot_output.txt
-cursor --diff ./results/gemini_output.txt ./results/agent_output.txt
+# Use specific AI provider
+auto-pr --gemini
+auto-pr --copilot
+auto-pr --agent
+
+# Auto-detect (default): tries gemini -> copilot -> agent
+auto-pr
 ```
 
-## Example Output
+### Other Options
 
-```markdown
-## Summary
-This PR transforms the auto-pr tool into an AI-powered PR generator
-that analyzes code changes and Jira tickets automatically.
+```bash
+# Specify base branch
+auto-pr --base develop
 
-## What Changed
-- Added AI CLI integration (Gemini, Copilot, Agent)
-- Implemented git diff analysis
-- Added Jira ticket context extraction
+# Verbose output (show full PR description)
+auto-pr --verbose
 
-## Technical Approach
-The script extracts git diffs and commit messages, combines them
-with Jira ticket data, and sends to the AI for analysis...
-
-## Key Files to Review
-- `auto-pr` - Main script with AI integration
-
-## Testing Considerations
-- Test with different AI CLIs
-- Verify PR descriptions match code changes
-
-## Jira Ticket
-https://company.atlassian.net/browse/TLAB-2023
+# Compare all AI providers
+auto-pr --test
+auto-pr --test --test-dir ./results
 ```
 
-## Branch Naming
+### All Options
 
-| Branch | Extracted Ticket |
-|--------|-----------------|
-| `task/TLAB-2023` | TLAB-2023 |
-| `feature/PROJ-123-login` | PROJ-123 |
-| `bugfix/ABC-456` | ABC-456 |
+```
+Usage: auto-pr [OPTIONS]
+
+Options:
+  -n, --dry-run        Preview without creating PR
+  -d, --draft          Create as draft PR
+  -b, --base TEXT      Base branch for PR [default: main]
+  --gemini             Use Gemini AI
+  --copilot            Use GitHub Copilot
+  --agent              Use Cursor Agent
+  --test               Compare all AI providers
+  --test-dir PATH      Output directory for --test
+  -v, --verbose        Verbose output
+  --help               Show this message and exit.
+```
+
+## Configuration
+
+Config file: `~/.config/autopr/config.toml`
+
+```toml
+# AI provider: auto, gemini, copilot, or agent
+ai_provider = "auto"
+
+# Default base branch for PRs
+base_branch = "main"
+
+# Jira instance URL
+jira_base_url = "https://your-company.atlassian.net"
+```
+
+## Branch Naming Convention
+
+The tool extracts Jira ticket keys from branch names. Use formats like:
+
+- `task/PROJ-123`
+- `feature/PROJ-123-description`
+- `fix/PROJ-123-bug-fix`
+- `PROJ-123-any-description`
+
+The pattern `[A-Z]+-[0-9]+` is matched anywhere in the branch name.
+
+## Architecture
+
+This tool follows CLEAN architecture principles:
+
+```
+auto_pr/
+├── domain/          # Entities, interfaces, exceptions (no dependencies)
+├── infrastructure/  # External tool implementations (git, jira, ai, github)
+├── application/     # Use cases and services
+├── cli/             # Typer CLI application
+└── config/          # Settings management
+```
+
+See `docs/` for detailed architecture and style guidelines.
+
+## Development
+
+```bash
+# Install with dev dependencies
+uv sync --all-extras
+
+# Run tests
+uv run pytest
+
+# Type checking
+uv run mypy auto_pr
+
+# Linting
+uv run ruff check auto_pr
+```
 
 ## License
 
