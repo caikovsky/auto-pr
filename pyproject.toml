@@ -1,6 +1,6 @@
 [project]
 name = "autopr"
-version = "1.0.0"
+version = "1.1.0"
 description = "AI-powered PR creation tool"
 readme = "README.md"
 requires-python = ">=3.12"
