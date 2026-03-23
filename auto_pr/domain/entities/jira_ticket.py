@@ -17,6 +17,12 @@ class JiraTicket(BaseModel):
     ticket_type: str = Field(description="Issue type (Task, Story, Bug, etc.)")
     url: str = Field(description="Full URL to the ticket")
 
+    @property
+    def clean_title(self) -> str:
+        """Title with bracketed tags (e.g. [AN], [SPIKE]) removed."""
+        cleaned = re.sub(r"\[.*?\]", "", self.title)
+        return re.sub(r"\s+", " ", cleaned).strip()
+
     @field_validator("key")
     @classmethod
     def validate_key_format(cls, v: str) -> str:
