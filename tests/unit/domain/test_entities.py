@@ -48,6 +48,27 @@ class TestJiraTicket:
         with pytest.raises(ValidationError):
             ticket.title = "New title"  # type: ignore[misc]
 
+    @pytest.mark.parametrize(
+        ("raw_title", "expected"),
+        [
+            ("[AN] Fix bug", "Fix bug"),
+            ("[AN] [SPIKE] Fix bug", "Fix bug"),
+            ("[Android] [PoC] Investigate auth", "Investigate auth"),
+            ("Fix bug", "Fix bug"),
+            ("[SPIKE] [AN] [iOS]  Explore feature", "Explore feature"),
+        ],
+    )
+    def test_clean_title_strips_tags(self, raw_title: str, expected: str) -> None:
+        """Test that clean_title removes bracketed tags from title."""
+        ticket = JiraTicket(
+            key="TLAB-100",
+            title=raw_title,
+            description="",
+            ticket_type="Task",
+            url="https://example.com",
+        )
+        assert ticket.clean_title == expected
+
     def test_from_acli_response(self) -> None:
         """Test creating ticket from acli JSON response."""
         acli_data = {

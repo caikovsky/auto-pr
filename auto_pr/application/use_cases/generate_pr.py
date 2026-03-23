@@ -71,7 +71,7 @@ class GeneratePRDescription:
 
         # Build title
         if ticket:
-            title = f"[{ticket.key}] {ticket.title}"
+            title = f"[{ticket.key}] - {ticket.clean_title}"
         else:
             # Use branch name as title
             branch_title = context.branch.replace("/", ": ").replace("-", " ").title()
