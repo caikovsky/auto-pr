@@ -9,25 +9,7 @@ A Claude skill that creates and updates GitHub pull requests. It gathers git con
 - acli
 - jq
 
-## Install
-
-1. Clone the repo:
-
-   ```
-   git clone git@github.com:caikovsky/auto-pr.git ~/Personal/auto-pr
-   ```
-
-2. Link it into the cross-agent skills directory:
-
-   ```
-   ln -s ~/Personal/auto-pr ~/.agents/skills/autopr
-   ```
-
-3. Link that into Claude:
-
-   ```
-   ln -s ~/.agents/skills/autopr ~/.claude/skills/autopr
-   ```
+## Usage
 
 The skill triggers on requests such as "autopr", "create pr" and "pr description". The instructions are in `SKILL.md`.
 
