@@ -9,9 +9,36 @@ A Claude skill that creates and updates GitHub pull requests. It gathers git con
 - acli
 - jq
 
+## Install
+
+### Claude Code
+
+```bash
+claude plugin marketplace add caikovsky/auto-pr
+claude plugin install autopr@auto-pr
+```
+
+In a session, use `/plugin marketplace add caikovsky/auto-pr` and `/plugin install autopr@auto-pr`.
+
+### Codex and other agents
+
+```bash
+npx skills add caikovsky/auto-pr --global --agent codex
+```
+
+This installs the skill to `~/.agents/skills/autopr`.
+
 ## Usage
 
-The skill triggers on requests such as "autopr", "create pr" and "pr description". The instructions are in `SKILL.md`.
+The skill triggers on requests such as "autopr", "create pr" and "pr description". The instructions are in `skills/autopr/SKILL.md`.
+
+## Validate
+
+```bash
+claude plugin validate --strict .
+npx skills add . --list
+uvx --from skills-ref agentskills validate skills/autopr
+```
 
 ## Former Python CLI
 

@@ -1,7 +1,9 @@
 ---
 name: autopr
-version: 1.4.1
 description: AI-powered PR creation tool. Gathers git context, fetches Jira ticket from branch name via acli, finds PR templates, generates a professional PR description, creates/updates the PR via gh CLI, and can post a review request to Slack channel C0AUU2B9D54 when explicitly requested. Use ALWAYS when the user asks to create/update a pull request, including phrases like "autopr", "create pr", "generate pr", "make pr", "open pr", "pr description", or any request to open or update a PR.
+license: MIT
+metadata:
+  version: "1.4.1"
 ---
 
 # AutoPR - AI-Powered Pull Request Creator
