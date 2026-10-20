@@ -423,6 +423,32 @@ check "fork upstream: configured upstream reported" '.upstream' fork/feature/for
 check "fork upstream: unpushed unknown" '.unpushed_count' null
 check "fork upstream: warning names the remote" '.warnings | map(select(contains("fork") and contains("git push -u origin feature/forked"))) | length' 1
 
+# --- linked issues from closing keywords ----------------------------------------------------
+new_repo
+echo history > history.txt
+git add history.txt
+git commit -q -m "Closes #99 on the base branch only"
+git push -q origin main
+git checkout -q -b feature/linked
+echo one > one.txt
+git add one.txt
+git commit -q -m "Add one" -m "Closes #12"
+echo two > two.txt
+git add two.txt
+git commit -q -m "Fixes #7 and something else"
+echo three > three.txt
+git add three.txt
+git commit -q -m "Add three (#44)" -m "Resolved: #30. Unfixed #9 stays out. Fix #12 again."
+git push -q -u origin feature/linked
+run_gather --base main
+check "linked issues: closing keywords, sorted, unique" '.linked_issues | join(",")' "7,12,30"
+check "linked issues: base commits and bare refs ignored" '.linked_issues | index(99) == null and index(44) == null and index(9) == null' true
+
+new_repo
+feature feature/unlinked
+run_gather --base main
+check "linked issues: none" '.linked_issues | length' 0
+
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0
 expect_fail "max-diff-lines text rejected" "positive integer" --max-diff-lines abc

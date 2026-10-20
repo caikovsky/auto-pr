@@ -34,7 +34,7 @@ An existing open PR for the branch is always updated. A second PR for the same b
 
 Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base <branch>` when the user gave one. It prints one JSON object:
 
-- `branch`, `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
+- `branch`, `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
 - `diff`, `diff_lines`, `truncated`, `diff_excluded_files` (lockfiles and generated files stay out of the diff)
 - `has_upstream` (true only when the configured upstream is a branch of `origin` with the same name as the local branch), `upstream` (the configured upstream, which may be another branch such as `origin/main` or another remote such as `fork/feat`), `unpushed_count` (null when `has_upstream` is false), `uncommitted`
@@ -67,7 +67,11 @@ Write the title and body yourself; call no other AI tool.
 
 **Title:**
 - New PR with a verified ticket: `[KEY] - <clean title>`. Get the clean title by running `scripts/clean-title.sh "<Jira summary>"`; it removes bracketed tags such as `[AN]`, `[Android]`, `[SPIKE]` and `[PoC]`.
-- New PR without a ticket: derive it from the branch name (`/` to `: `, `-` to a space, title case).
+- New PR without a ticket: use the first rule that applies.
+  1. `linked_issues` is not empty: the title of the first issue, from `gh issue view <N> --json title --jq .title` (run outside the sandbox). If the call fails, warn once and go on.
+  2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`).
+  3. Write a short summary of the commits: imperative mood, at most 72 characters.
+  4. Only if the commits say nothing useful (for example `wip`): derive it from the branch name (`/` to `: `, `-` to a space, title case).
 - Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 
 **Body:**
@@ -99,7 +103,7 @@ Create the body file once and note the path it prints. Use that literal absolute
 mktemp "${TMPDIR:-/tmp}/autopr-body.XXXXXX"
 ```
 
-Write the body to that path with a quoted heredoc (`<<'AUTOPR_EOF'`) so the shell expands nothing. End the file with a single newline. Below, `<body-file>` stands for that path.
+Write the body to that path with your file-writing tool, or with a quoted heredoc (`<<'AUTOPR_EOF'`, closed by a line holding only `AUTOPR_EOF`) in its own command. End the file with a single newline. Check it with `tail -n 3 <body-file>` before you run `gh pr create`. Never write the file and create the PR in one command: a missing heredoc terminator would publish the following commands as the body. Below, `<body-file>` stands for that path.
 
 **No `pr` (create):**
 
@@ -108,7 +112,7 @@ gh pr create --head <branch> --base <base> --title "<title>" --body-file <body-f
 gh pr edit <number> --add-reviewer @copilot
 ```
 
-`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. If it fails (Copilot review may be off for the repo), warn once and continue. Take `<number>` from the URL that `gh pr create` prints.
+`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. Exit code 0 means the request succeeded. Do not re-check it: `reviewRequests` can stay empty for a bot reviewer. Only on a non-zero exit (Copilot review may be off for the repo), warn once and continue. Take `<number>` from the URL that `gh pr create` prints.
 
 **`pr` exists (update):**
 
