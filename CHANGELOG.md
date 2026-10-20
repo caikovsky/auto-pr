@@ -14,6 +14,9 @@ Fixes from a review of the skill. Behavior changes are marked **breaking**.
 - Ticket keys match case-insensitively (`feature/tlab-2023-x`) and may contain digits. The key is a candidate (`ticket_candidate`): the skill uses it only when `acli` returns the item, so branches such as `update-deps-2024` do not produce a fake ticket. Keys need two leading letters and do not match version numbers like `lodash-4.17.21`.
 - PR updates use `jq` and `gh api --silent --input`: no `curl`, no token in the command line, and a failed request returns an error. The check after an update diffs the whole body.
 - On update, the skill keeps the human-written PR title unless a verified ticket exists.
+- A new PR without a ticket takes its title from the linked issue (`gather.sh` reports `linked_issues` from "closes/fixes/resolves #N" in the commits), else the subject of a single commit, else a short summary of the commits, and only last from the branch name.
+- The Copilot request counts as done on exit code 0 (`reviewRequests` can stay empty for a bot reviewer); the skill warns only on a non-zero exit.
+- The skill writes the body file and creates the PR in separate commands, and checks the file first. A missing heredoc terminator once published command text as the PR body.
 - `gather.sh` exits 2 with a message when `gh pr view` fails (other than "no pull requests found") or `git fetch` fails, instead of returning stale data. The skill always runs `gather.sh`, `gh` and `acli` outside the sandbox.
 - `gather.sh` reports `pr_lookup` (`found`, `none`, `skipped`). The skill stops, unless `--dry-run`, when the lookup was skipped, so a skipped lookup never leads to a duplicate PR.
 - `gather.sh` handles large diffs (the stat no longer dies with SIGPIPE), shallow and single-branch clones, a missing `origin`, non-ASCII paths, and an upstream that names another branch (`git checkout -b feat origin/main`) or another remote (`fork/feat`).

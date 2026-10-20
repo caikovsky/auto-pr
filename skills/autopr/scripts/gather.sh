@@ -179,6 +179,12 @@ fi
 RANGE="origin/$BASE...HEAD"
 
 qgit log --no-decorate --format='%h %s' "origin/$BASE..HEAD" | lines_json > "$TMP/commits.json"
+# Issues the branch closes: "closes|fixes|resolves #N" (any tense, optional colon) in its commit
+# messages. Bare #N is ignored: it is usually a PR number, as in "Add feature (#7)".
+git log --format=%B "origin/$BASE..HEAD" > "$TMP/messages.txt"
+{ grep -Eio '(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+' "$TMP/messages.txt" || true; } \
+  | { grep -Eo '[0-9]+$' || true; } | sort -nu \
+  | jq -Rn '[inputs | select(length > 0) | tonumber]' > "$TMP/linked.json"
 qgit diff --no-renames --name-only "$RANGE" | lines_json > "$TMP/files.json"
 qgit diff --no-renames --stat=120 "$RANGE" > "$TMP/stat.full"
 if [ "$(wc -l < "$TMP/stat.full" | tr -d ' ')" -le "$MAX_STAT_LINES" ]; then
@@ -273,6 +279,7 @@ jq -n \
   --arg base_source "$BASE_SOURCE" \
   --slurpfile commits "$TMP/commits.json" \
   --slurpfile files "$TMP/files.json" \
+  --slurpfile linked "$TMP/linked.json" \
   --slurpfile excluded "$TMP/excluded.json" \
   --rawfile stat "$TMP/stat.txt" \
   --rawfile diff "$TMP/diff.txt" \
@@ -295,6 +302,7 @@ jq -n \
     ticket_candidate: (if $ticket == "" then null else $ticket end),
     base: $base,
     base_source: $base_source,
+    linked_issues: $linked[0],
     commit_count: ($commits[0] | length),
     commits: $commits[0],
     file_count: ($files[0] | length),
