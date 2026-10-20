@@ -4,7 +4,7 @@
 
 Fixes from a review of the skill. Behavior changes are marked **breaking**.
 
-- **Breaking:** removed the Slack review request (`--slack`, Phase 6).
+- **Breaking:** removed the optional chat post that requested a review, with its argument and its phase.
 - **Breaking:** removed `--new` and `--update`. An open PR for the branch is always updated, because GitHub allows one open PR per head and base.
 - Diff base is now `origin/<base>...HEAD` after a fetch. Before, it was the working tree against the local base tip, which showed uncommitted edits and, when the base had moved, upstream commits as reverts.
 - The base branch is resolved from `--base`, then the existing PR, then the repo default branch, then `origin/HEAD`. It is no longer fixed to `main`.
