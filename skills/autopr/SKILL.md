@@ -17,7 +17,7 @@ Write a PR description from the branch diff and the Jira ticket, then create the
 | `--dry-run`, `-n` | Preview the title and body, change nothing | off |
 | `--draft`, `-d` | Create as draft; on update, convert the PR to draft | off |
 | `--ready` | On update, mark a draft PR ready for review | off |
-| `--base <branch>`, `-b <branch>` | Base branch | existing PR base, else repo default branch |
+| `--base <branch>`, `-b <branch>` | Base branch. On update, a different base also changes the PR base | existing PR base, else repo default branch |
 | `--reviewer <handle>` | Request a review; repeatable | none |
 | `--label <name>` | Add a label; repeatable | none |
 | `--verbose`, `-v` | Show the full body in the preview | off |
@@ -27,26 +27,28 @@ An existing open PR for the branch is always updated. A second PR for the same b
 ## 1. Preconditions
 
 1. Check that `git`, `gh` and `jq` are installed. If one is missing, stop and name the install command. `acli` is optional: without it, skip Jira and warn once.
-2. Run `gh auth status`. If it reports an error caused by the sandbox (permission or network denied), retry the command outside the sandbox. If it reports "not logged in", stop and ask the user to run `gh auth login`.
+2. Run `scripts/gather.sh`, every `gh` command and every `acli` command outside the sandbox (request approval where the runtime asks). Inside a sandbox they fail with misleading messages: `The token in keyring is invalid`, `x509: certificate signed by unknown authority`, proxy authentication errors. Those are sandbox artifacts, not a logged-out user. Run `gh auth status` outside the sandbox. Only when it reports "not logged in" there, stop and ask the user to run `gh auth login`.
 3. Never commit or push. Never edit files in the repository.
 
 ## 2. Gather
 
 Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base <branch>` when the user gave one. It prints one JSON object:
 
-- `branch`, `ticket` (upper-cased key or null), `base`, `base_source`
+- `branch`, `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
 - `diff`, `diff_lines`, `truncated`, `diff_excluded_files` (lockfiles and generated files stay out of the diff)
-- `has_upstream`, `unpushed_count`, `uncommitted`
+- `has_upstream` (true only when the configured upstream branch has the same name as the local branch), `upstream` (the configured upstream, which may be a different branch such as `origin/main`), `unpushed_count` (null when `has_upstream` is false), `uncommitted`
 - `template` (`path`, `content`, or null), `other_templates`
 - `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, or null), `warnings`
 
 The diff is `origin/<base>...HEAD` after a fetch, so it holds only this branch's commits and no uncommitted edits.
 
+`gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed `gh pr view` or `git fetch`, or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
+
 Print every entry of `warnings`. Then check:
 
 - **Stop** when `commit_count` is 0.
-- **Stop** (unless `--dry-run`) when `has_upstream` is false or `unpushed_count` is above 0. Tell the user to run `git push -u origin <branch>` (or `git push`) and to run the skill again.
+- **Stop** (unless `--dry-run`) when `has_upstream` is false or `unpushed_count` is above 0. Tell the user to run `git push -u origin <branch>` and to run the skill again. `has_upstream` is also false when the upstream is another branch, such as after `git checkout -b feat origin/main`.
 - **Warn** when `uncommitted` is true: the PR will not contain those edits.
 - **Warn** when `file_count` is above 50 or `insertions + deletions` is above 1500: suggest splitting the PR. Continue.
 - When `truncated` is true, say so. Rely on `commits`, `files` and `stat` for the parts of the diff that are missing.
@@ -54,20 +56,21 @@ Print every entry of `warnings`. Then check:
 
 ## 3. Jira
 
-When `ticket` is set and `acli` exists, run `acli jira workitem view <KEY> --json`. Read `fields.summary`, `fields.issuetype.name` and `fields.description` (Atlassian Document Format: take the text of the paragraph blocks). The URL is `https://everlong.atlassian.net/browse/<KEY>`.
+`ticket_candidate` is a guess from the branch name. Branches such as `update-deps-2024` give `DEPS-2024`. A ticket exists only when `acli jira workitem view <KEY> --json` returns that item for the candidate. Read `fields.summary`, `fields.issuetype.name` and `fields.description` (Atlassian Document Format: take the text of the paragraph blocks). The URL is `https://everlong.atlassian.net/browse/<KEY>`.
 
-When `acli` is missing or the call fails, continue without ticket data and show one warning.
+When `acli` is missing, or the call fails or finds no item, there is no ticket: do not use the candidate in the title, the body or a link. Continue and show one warning that the candidate was not verified.
 
 ## 4. Write the body
 
 Write the title and body yourself; call no other AI tool.
 
 **Title:**
-- With a ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title.
-- Without a ticket: derive it from the branch name (`/` to `: `, `-` to a space, title case).
+- New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title.
+- New PR without a ticket: derive it from the branch name (`/` to `: `, `-` to a space, title case).
+- Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 
 **Body:**
-- With a template: fill it completely and keep its headings, order and every HTML comment. Replace placeholders: `<!-- Link to Jira ticket -->`, `[JIRA_LINK]` and `{JIRA_LINK}` become the ticket URL; `<!-- Describe your changes -->` becomes the description; `<!-- What type of change is this? -->` becomes the Jira issue type.
+- With a template: fill it completely and keep its headings, order and every HTML comment. Replace placeholders (ticket ones only with a verified ticket; otherwise write "none"): `<!-- Link to Jira ticket -->`, `[JIRA_LINK]` and `{JIRA_LINK}` become the ticket URL; `<!-- Describe your changes -->` becomes the description; `<!-- What type of change is this? -->` becomes the Jira issue type.
 - Without a template: summary, what changed and why, technical approach, key files, testing notes.
 - Keep it concise. Output only the markdown body.
 - Checklists: keep every item exactly as in the template. Check (`- [x]`) only items the changes clearly satisfy.
@@ -89,12 +92,18 @@ Show: title, body (the first 500 characters unless `--verbose`), ticket key or "
 
 ## 6. Create or update
 
-Write the body to `"$TMPDIR/autopr-body.md"` with a quoted heredoc (`<<'AUTOPR_EOF'`) so the shell does not expand anything. End the file with a single newline.
+Create the body file once and note the path it prints. Use that literal absolute path in every later command; shell variables do not survive between commands, and a fixed name collides with parallel runs.
+
+```bash
+mktemp "${TMPDIR:-/tmp}/autopr-body.XXXXXX"
+```
+
+Write the body to that path with a quoted heredoc (`<<'AUTOPR_EOF'`) so the shell expands nothing. End the file with a single newline. Below, `<body-file>` stands for that path.
 
 **No `pr` (create):**
 
 ```bash
-gh pr create --head <branch> --base <base> --title "<title>" --body-file "$TMPDIR/autopr-body.md" --assignee @me [--draft] [--reviewer <handle>]... [--label <name>]...
+gh pr create --head <branch> --base <base> --title "<title>" --body-file <body-file> --assignee @me [--draft] [--reviewer <handle>]... [--label <name>]...
 gh pr edit <number> --add-reviewer @copilot
 ```
 
@@ -103,9 +112,11 @@ gh pr edit <number> --add-reviewer @copilot
 **`pr` exists (update):**
 
 ```bash
-gh pr edit <number> --title "<title>" --add-assignee @me [--add-reviewer <handle>]... [--add-label <name>]...
-jq -Rs '{body: .}' "$TMPDIR/autopr-body.md" | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --input -
+gh pr edit <number> --add-assignee @me [--title "<title>"] [--base <base>] [--add-reviewer <handle>]... [--add-label <name>]...
+jq -Rs '{body: .}' <body-file> | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --silent --input -
 ```
+
+Pass `--title` only when section 4 says to change it. Pass `--base <base>` only when `base_source` is `argument` and `base` differs from `pr.baseRefName`.
 
 Then sync the draft state: with `--draft` and `pr.isDraft` false, run `gh pr ready <number> --undo`. With `--ready` and `pr.isDraft` true, run `gh pr ready <number>`.
 
@@ -114,22 +125,22 @@ Do not use `curl` and never put a token in a command line.
 **Verify the whole body, every time:**
 
 ```bash
-gh pr view <number> --json body | jq -j .body | diff - "$TMPDIR/autopr-body.md"
+gh pr view <number> --json body | jq -j .body | diff - <body-file>
 ```
 
 A non-empty diff means GitHub changed or dropped content. Show the diff and do not report success. Backticks, arrows and em dashes are safe in the body; the diff catches any silent failure.
 
-Report the PR URL.
+Remove the body file with `rm -f <body-file>`. Report the PR URL.
 
 ## Errors
 
 | Error | Action |
 |-------|--------|
 | Not in a git repo | Stop: "Not in a git repository." |
-| `gather.sh` exits 2 | Show its message (detached HEAD, no `origin`, unknown base). Stop. |
+| `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure, no merge base, unknown base). Stop. |
 | No commits ahead | Stop: "No commits between base and head." |
 | Branch not pushed | Stop with the push command (see section 2). |
 | `gh` missing or logged out | Stop with the install or login command. |
 | `acli` missing or failed | Continue without the ticket; one warning. |
-| `gh pr create` fails | Show the error; suggest `gh auth status`. |
+| `gh pr create` fails | Show the error; suggest running `gh auth status` outside the sandbox. |
 | Verification diff not empty | Show the diff; report failure. |
