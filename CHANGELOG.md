@@ -20,11 +20,12 @@ Fixes from a review of the skill. Behavior changes are marked **breaking**.
 - On update, the skill keeps the human-written PR title unless a verified ticket exists.
 - A new PR without a ticket takes its title from the linked issue (`gather.sh` reports `linked_issues` from "closes/fixes/resolves #N" in the commits), else the subject of a single commit, else a short summary of the commits, and only last from the branch name.
 - The Copilot request counts as done on exit code 0 (`reviewRequests` can stay empty for a bot reviewer); the skill warns only on a non-zero exit.
+- Untrusted text (Jira summary, issue titles, commit messages) never goes into a command line. A double-quoted `$0` or backtick in a summary used to expand and could run commands. The skill now writes the title to a file and passes `--title "$(cat <file>)"`; `tests/title-file.test.sh` proves the pattern with a fake `gh`. `gather.sh` refuses branch and base names with `$`, backticks, quotes or backslashes, and `linked_issues` no longer matches `fix #12abc`.
 - The skill writes the body file and creates the PR in separate commands, and checks the file first. A missing heredoc terminator once published command text as the PR body.
 - `gather.sh` exits 2 with a message when `gh pr view` fails (other than "no pull requests found") or `git fetch` fails, instead of returning stale data. The skill always runs `gather.sh`, `gh` and `acli` outside the sandbox.
 - `gather.sh` reports `pr_lookup` (`found`, `none`, `skipped`). The skill stops, unless `--dry-run`, when the lookup was skipped, so a skipped lookup never leads to a duplicate PR.
 - `gather.sh` handles large diffs (the stat no longer dies with SIGPIPE), shallow and single-branch clones, a missing `origin`, non-ASCII paths, and an upstream that names another branch (`git checkout -b feat origin/main`) or another remote (`fork/feat`).
-- The body file comes from `mktemp`, so parallel runs and sandbox TMPDIR differences cannot collide.
+- Body, title and Jira data live in one `mktemp -d` work directory, so parallel runs and sandbox TMPDIR differences cannot collide.
 - Copilot review is requested on create only, with `gh pr edit --add-reviewer @copilot`.
 - Draft state syncs on update (`gh pr ready`, `--ready`). Added `--reviewer` and `--label`.
 - Warning above 50 files or 1500 changed lines.
