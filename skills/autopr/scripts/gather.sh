@@ -92,6 +92,9 @@ if [[ $BRANCH =~ (^|[^A-Za-z0-9])([A-Za-z]{2,}[A-Za-z0-9]*-[0-9]+)([^.0-9]|$) ]]
   TICKET=$(printf '%s' "${BASH_REMATCH[2]}" | tr '[:lower:]' '[:upper:]')
 fi
 
+# pr_lookup: found (open PR), none (gh answered: no open PR), skipped (gh was not asked).
+# With "skipped", pr is null because it is unknown, not because it does not exist.
+PR_LOOKUP=skipped
 HAVE_GH=0
 if [ "$NO_NETWORK" != 1 ]; then
   if command -v gh > /dev/null 2>&1; then
@@ -111,11 +114,15 @@ if [ "$HAVE_GH" = 1 ]; then
     if [ "$PR_STATE" = OPEN ]; then
       jq -c 'del(.state)' "$TMP/pr.raw" > "$TMP/pr.json"
       PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
+      PR_LOOKUP=found
     else
       warn "latest PR for this branch is $PR_STATE: treated as no existing PR"
+      PR_LOOKUP=none
     fi
-  elif ! grep -qi 'no pull requests found' "$TMP/pr.err"; then
-    die "gh pr view failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, or pass --no-network to skip GitHub lookups."
+  elif grep -qi 'no pull requests found' "$TMP/pr.err"; then
+    PR_LOOKUP=none
+  else
+    die "gh pr view failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring) and log in with gh auth login."
   fi
 fi
 
@@ -158,7 +165,7 @@ fi
 # The explicit refspec also stores origin/<base> in single-branch clones.
 if [ "$NO_NETWORK" != 1 ]; then
   git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2> "$TMP/fetch.err" \
-    || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox, check the network and the remote, or pass --no-network to use the last known origin/$BASE."
+    || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
 fi
 git rev-parse --verify --quiet "refs/remotes/origin/$BASE^{commit}" > /dev/null \
   || die "origin/$BASE not found: fetch it or pass a different --base"
@@ -207,15 +214,19 @@ if [ "$(wc -c < "$TMP/diff.txt" | tr -d ' ')" -gt "$MAX_DIFF_BYTES" ]; then
   TRUNCATED=true
 fi
 
-# Upstream status. has_upstream is true only when the configured upstream branch has the name of
-# the local branch: `git checkout -b feat origin/main` sets upstream origin/main, and `git push`
-# would not publish feat. upstream always reports the configured upstream (or null).
+# Upstream status. has_upstream is true only when the configured upstream is a branch of origin
+# with the name of the local branch: `git checkout -b feat origin/main` sets upstream origin/main
+# and `git push` would not publish feat; an upstream on another remote (fork/feat) is not where
+# `gh pr create --head feat` looks. upstream always reports the configured upstream (or null).
 HAS_UPSTREAM=false
 UPSTREAM=""
 UNPUSHED=null
 if UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2> /dev/null); then
   UPSTREAM_REF=$(git config --get "branch.$BRANCH.merge" || true)
-  if [ "${UPSTREAM_REF#refs/heads/}" = "$BRANCH" ]; then
+  UPSTREAM_REMOTE=$(git config --get "branch.$BRANCH.remote" || true)
+  if [ "$UPSTREAM_REMOTE" != origin ]; then
+    warn "upstream is $UPSTREAM on remote $UPSTREAM_REMOTE, but the PR head is read from origin: publish it with git push -u origin $BRANCH"
+  elif [ "${UPSTREAM_REF#refs/heads/}" = "$BRANCH" ]; then
     HAS_UPSTREAM=true
     UNPUSHED=$(git rev-list --count '@{u}..HEAD')
   else
@@ -277,6 +288,7 @@ jq -n \
   --rawfile template_content "$TMP/template.md" \
   --slurpfile other_templates "$TMP/other-templates.json" \
   --slurpfile pr "$TMP/pr.json" \
+  --arg pr_lookup "$PR_LOOKUP" \
   --slurpfile warnings "$TMP/warnings.json" \
   '{
     branch: $branch,
@@ -301,5 +313,6 @@ jq -n \
     template: (if $template_path == "" then null else {path: $template_path, content: $template_content} end),
     other_templates: $other_templates[0],
     pr: $pr[0],
+    pr_lookup: $pr_lookup,
     warnings: $warnings[0]
   }'

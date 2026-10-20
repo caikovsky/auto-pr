@@ -37,9 +37,9 @@ Run `scripts/gather.sh` from this skill's directory, with the repository as the 
 - `branch`, `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
 - `diff`, `diff_lines`, `truncated`, `diff_excluded_files` (lockfiles and generated files stay out of the diff)
-- `has_upstream` (true only when the configured upstream branch has the same name as the local branch), `upstream` (the configured upstream, which may be a different branch such as `origin/main`), `unpushed_count` (null when `has_upstream` is false), `uncommitted`
+- `has_upstream` (true only when the configured upstream is a branch of `origin` with the same name as the local branch), `upstream` (the configured upstream, which may be another branch such as `origin/main` or another remote such as `fork/feat`), `unpushed_count` (null when `has_upstream` is false), `uncommitted`
 - `template` (`path`, `content`, or null), `other_templates`
-- `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, or null), `warnings`
+- `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, or null), `pr_lookup` (`found`, `none` or `skipped`), `warnings`
 
 The diff is `origin/<base>...HEAD` after a fetch, so it holds only this branch's commits and no uncommitted edits.
 
@@ -48,7 +48,8 @@ The diff is `origin/<base>...HEAD` after a fetch, so it holds only this branch's
 Print every entry of `warnings`. Then check:
 
 - **Stop** when `commit_count` is 0.
-- **Stop** (unless `--dry-run`) when `has_upstream` is false or `unpushed_count` is above 0. Tell the user to run `git push -u origin <branch>` and to run the skill again. `has_upstream` is also false when the upstream is another branch, such as after `git checkout -b feat origin/main`.
+- **Stop** (unless `--dry-run`) when `pr_lookup` is `skipped`: `pr` is null because nobody asked GitHub, not because no PR exists. Creating a PR from that state can duplicate or mis-base an existing one. Run `gather.sh` again without `--no-network`, outside the sandbox. Treat `pr` as "no PR" only when `pr_lookup` is `none`.
+- **Stop** (unless `--dry-run`) when `has_upstream` is false or `unpushed_count` is above 0. Tell the user to run `git push -u origin <branch>` and to run the skill again. `has_upstream` is also false when the upstream is another branch (after `git checkout -b feat origin/main`) or another remote (`fork/feat`), because `gh pr create --head <branch>` reads the branch from `origin`.
 - **Warn** when `uncommitted` is true: the PR will not contain those edits.
 - **Warn** when `file_count` is above 50 or `insertions + deletions` is above 1500: suggest splitting the PR. Continue.
 - When `truncated` is true, say so. Rely on `commits`, `files` and `stat` for the parts of the diff that are missing.

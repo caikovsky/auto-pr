@@ -8,6 +8,7 @@ An agent skill for Claude Code and Codex that creates and updates GitHub pull re
 - gh
 - jq
 - acli (optional: without it the Jira lookup is skipped)
+- Node.js >= 22.20 (for `npx skills`)
 
 ## Install
 

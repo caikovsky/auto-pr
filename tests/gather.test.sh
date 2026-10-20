@@ -290,6 +290,7 @@ run_gather
 check "base: existing PR beats gh default" '.base' main
 check "base: existing PR source" '.base_source' pull-request
 check "pr: number" '.pr.number' 9
+check "pr_lookup: found for an open PR" '.pr_lookup' found
 check "pr: draft" '.pr.isDraft' true
 check "pr: state field not exposed" '.pr | has("state")' false
 
@@ -322,17 +323,21 @@ expect_fail "gh pr view error is fatal" "gh pr view failed" --base main
 expect_fail "gh pr view error names the sandbox" "outside the sandbox" --base main
 export FAKE_GH_PR_ERR="Get https://api.github.com: x509: certificate signed by unknown authority"
 expect_fail "gh x509 error is fatal" "x509" --base main
+if grep -qF -- "--no-network" "$ERR"; then bad "gh error message: no --no-network hint" "no hint" "$(cat "$ERR")"; else ok "gh error message: no --no-network hint"; fi
 run_gather --base main --no-network
 check "gh error skipped with --no-network" '.pr' null
+check "pr_lookup: skipped with --no-network" '.pr_lookup' skipped
 unset FAKE_GH_PR_ERR
 
 run_gather --base main
 check "gh: no PR is not a warning" '.warnings | length' 0
 check "gh: no PR gives null" '.pr' null
+check "pr_lookup: none when gh finds no PR" '.pr_lookup' none
 
 export FAKE_GH_PR_JSON='{"number":4,"url":"u","title":"T","body":"B","isDraft":false,"baseRefName":"main","state":"MERGED"}'
 run_gather --base main
 check "gh: merged PR treated as none" '.pr' null
+check "pr_lookup: none for a merged PR" '.pr_lookup' none
 check "gh: merged PR warned" '.warnings | map(select(contains("MERGED"))) | length' 1
 unset FAKE_GH_PR_JSON
 
@@ -355,6 +360,7 @@ new_repo
 feature feature/fetchfail
 git remote set-url origin "$DIR/missing.git"
 expect_fail "fetch failure is fatal" "git fetch" --base main
+if grep -qF -- "--no-network" "$ERR"; then bad "fetch error message: no --no-network hint" "no hint" "$(cat "$ERR")"; else ok "fetch error message: no --no-network hint"; fi
 run_gather --base main --no-network
 check "fetch skipped with --no-network" '.base' main
 
@@ -404,6 +410,18 @@ git push -q -u origin feat/from-main
 run_gather --base main
 check "upstream fixed by push -u" '.has_upstream' true
 check "upstream fixed: nothing unpushed" '.unpushed_count' 0
+
+# --- upstream on a remote other than origin -------------------------------------------------
+new_repo
+feature feature/forked
+git init -q --bare -b main "$DIR/fork.git"
+git remote add fork "$DIR/fork.git"
+git push -q -u fork feature/forked 2> /dev/null
+run_gather --base main
+check_no "fork upstream: has_upstream" '.has_upstream'
+check "fork upstream: configured upstream reported" '.upstream' fork/feature/forked
+check "fork upstream: unpushed unknown" '.unpushed_count' null
+check "fork upstream: warning names the remote" '.warnings | map(select(contains("fork") and contains("git push -u origin feature/forked"))) | length' 1
 
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0
