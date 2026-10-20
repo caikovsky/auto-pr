@@ -94,11 +94,25 @@ feature() {
 
 # run_gather [args]: run gather.sh in the current repo; stdout to $OUT, stderr to $ERR.
 run_gather() {
-  bash "$GATHER" "$@" > "$OUT" 2> "$ERR" || {
+  "$BASH" "$GATHER" "$@" > "$OUT" 2> "$ERR" || {
     echo "gather.sh exited non-zero: $(cat "$ERR")" >&2
     return 1
   }
   jq -e . "$OUT" > /dev/null
+}
+
+# expect_fail <name> <stderr substring> [args]: gather.sh must exit 2 and mention the substring.
+expect_fail() {
+  local name="$1" needle="$2" code=0
+  shift 2
+  "$BASH" "$GATHER" "$@" > "$OUT" 2> "$ERR" || code=$?
+  if [ "$code" -ne 2 ]; then
+    bad "$name: exit code" 2 "$code"
+  elif grep -qF -- "$needle" "$ERR"; then
+    ok "$name"
+  else
+    bad "$name: stderr" "contains [$needle]" "$(cat "$ERR")"
+  fi
 }
 
 # --- base moved ahead: upstream commits must not show up -------------------------------------
@@ -166,7 +180,7 @@ ticket_case() { # <branch> <expected key or null>
   new_repo
   feature "$1"
   run_gather --base main
-  check "ticket: $1" '.ticket' "$2"
+  check "ticket candidate: $1" '.ticket_candidate' "$2"
 }
 ticket_case "task/TLAB-2023" TLAB-2023
 ticket_case "feature/tlab-2023-new-login" TLAB-2023
@@ -175,6 +189,10 @@ ticket_case "TLAB-7" TLAB-7
 ticket_case "feature/no-ticket-here" null
 ticket_case "feature/1234-numbers-only" null
 ticket_case "release/v2" null
+ticket_case "release/v1-2" null
+ticket_case "dependabot/npm_and_yarn/lodash-4.17.21" null
+ticket_case "renovate/node-20.x" null
+ticket_case "update-deps-2024" DEPS-2024 # kept as a candidate: SKILL.md verifies it with acli
 
 # --- lockfile and generated-file exclusion --------------------------------------------------
 new_repo
@@ -290,19 +308,22 @@ run_gather --no-network
 check "base: common-name fallback" '.base' main
 check "base: common-name source" '.base_source' common-name
 
-if bash "$GATHER" --no-network --base nope > "$OUT" 2> "$ERR"; then
+if "$BASH" "$GATHER" --no-network --base nope > "$OUT" 2> "$ERR"; then
   bad "base: unknown base fails" "exit 2" "exit 0"
 else
   ok "base: unknown base fails"
 fi
 
-# --- gh behaviour: degrade cleanly ----------------------------------------------------------
+# --- gh behaviour --------------------------------------------------------------------------
 new_repo
 feature feature/gh
 export FAKE_GH_PR_ERR="error connecting to api.github.com"
-run_gather --base main
-check "gh offline: pr null" '.pr' null
-check "gh offline: warning" '.warnings | map(select(startswith("gh pr view failed"))) | length' 1
+expect_fail "gh pr view error is fatal" "gh pr view failed" --base main
+expect_fail "gh pr view error names the sandbox" "outside the sandbox" --base main
+export FAKE_GH_PR_ERR="Get https://api.github.com: x509: certificate signed by unknown authority"
+expect_fail "gh x509 error is fatal" "x509" --base main
+run_gather --base main --no-network
+check "gh error skipped with --no-network" '.pr' null
 unset FAKE_GH_PR_ERR
 
 run_gather --base main
@@ -315,12 +336,85 @@ check "gh: merged PR treated as none" '.pr' null
 check "gh: merged PR warned" '.warnings | map(select(contains("MERGED"))) | length' 1
 unset FAKE_GH_PR_JSON
 
+# --- large stat: no SIGPIPE from head ------------------------------------------------------
+new_repo
+git checkout -q -b feature/huge
+deep="app/src/main/java/com/league/feature/subfeature/module/implementation/internal/very/long/package/name"
+mkdir -p "$deep"
+for i in $(seq 1 800); do echo "val a$i = $i" > "$deep/GeneratedLookingFile$i.kt"; done
+git add -A
+git commit -q -m "many files"
+git push -q -u origin feature/huge
+run_gather --base main
+check "large stat: file count" '.file_count' 800
+check "large stat: stat capped" '.stat | split("\n") | map(select(length > 0)) | length' 100
+check "large stat: summary line kept" '.stat | split("\n") | map(select(length > 0)) | last | contains("800 files changed")' true
+
+# --- fetch failure is fatal -----------------------------------------------------------------
+new_repo
+feature feature/fetchfail
+git remote set-url origin "$DIR/missing.git"
+expect_fail "fetch failure is fatal" "git fetch" --base main
+run_gather --base main --no-network
+check "fetch skipped with --no-network" '.base' main
+
+# --- shallow and single-branch clones -------------------------------------------------------
+new_repo
+feature feature/clone
+git clone -q --depth 1 --branch feature/clone "file://$DIR/origin.git" "$DIR/shallow" 2> /dev/null
+cd "$DIR/shallow"
+expect_fail "shallow clone: clear message" "git fetch --unshallow" --base main
+cd "$DIR/repo"
+git clone -q --single-branch --branch feature/clone "file://$DIR/origin.git" "$DIR/single" 2> /dev/null
+cd "$DIR/single"
+run_gather --base main
+check "single-branch clone: base fetched" '.commit_count' 1
+
+# --- no origin remote -----------------------------------------------------------------------
+new_repo
+feature feature/noorigin
+git remote remove origin
+expect_fail "no origin: clear message" "no remote named origin" --base main
+expect_fail "no origin: checked before the base" "no remote named origin"
+
+# --- non-ASCII paths ------------------------------------------------------------------------
+new_repo
+git checkout -q -b feature/unicode
+echo a > "café.txt"
+echo b > "日本語.txt"
+git add -A
+git commit -q -m "unicode names"
+git push -q -u origin feature/unicode
+run_gather --base main
+check "unicode: file list not escaped" '.files | index("café.txt") != null and index("日本語.txt") != null' true
+check "unicode: diff header not escaped" '.diff | contains("a/café.txt") or contains("b/café.txt")' true
+
+# --- upstream named after another branch ----------------------------------------------------
+new_repo
+git checkout -q -b feat/from-main origin/main
+echo x > x.txt
+git add x.txt
+git commit -q -m "branched from origin/main"
+run_gather --base main
+check_no "upstream mismatch: has_upstream" '.has_upstream'
+check "upstream mismatch: configured upstream reported" '.upstream' origin/main
+check "upstream mismatch: unpushed unknown" '.unpushed_count' null
+check "upstream mismatch: warned" '.warnings | map(select(contains("git push -u origin feat/from-main"))) | length' 1
+git push -q -u origin feat/from-main
+run_gather --base main
+check "upstream fixed by push -u" '.has_upstream' true
+check "upstream fixed: nothing unpushed" '.unpushed_count' 0
+
+# --- option validation ----------------------------------------------------------------------
+expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0
+expect_fail "max-diff-lines text rejected" "positive integer" --max-diff-lines abc
+
 # --- argument errors ------------------------------------------------------------------------
 new_repo
 feature feature/args
-if bash "$GATHER" --bogus > "$OUT" 2> "$ERR"; then bad "args: unknown flag fails" "exit 2" "exit 0"; else ok "args: unknown flag fails"; fi
+if "$BASH" "$GATHER" --bogus > "$OUT" 2> "$ERR"; then bad "args: unknown flag fails" "exit 2" "exit 0"; else ok "args: unknown flag fails"; fi
 git checkout -q --detach
-if bash "$GATHER" --no-network --base main > "$OUT" 2> "$ERR"; then bad "detached HEAD fails" "exit 2" "exit 0"; else ok "detached HEAD fails"; fi
+if "$BASH" "$GATHER" --no-network --base main > "$OUT" 2> "$ERR"; then bad "detached HEAD fails" "exit 2" "exit 0"; else ok "detached HEAD fails"; fi
 
 echo
 echo "passed: $PASS, failed: $FAIL"

@@ -6,7 +6,10 @@
 #   --no-network           skip git fetch and every gh call (also AUTOPR_NO_NETWORK=1)
 #   --max-diff-lines <n>   cut the diff after n lines (default 1200, also AUTOPR_MAX_DIFF_LINES)
 #
-# Read-only: never commits, pushes or edits files. Exit 2 on a fatal error (message on stderr).
+# Read-only: never commits, pushes or edits files. Exit 2 on a fatal error (message on stderr):
+# no repo, no origin, detached HEAD, a gh or git fetch failure, or no merge base with the base branch.
+# A shell pipe that closes early (| head) kills the writer with SIGPIPE under pipefail, so every
+# command with long output goes through a temp file instead.
 set -euo pipefail
 
 BASE_ARG=""
@@ -43,6 +46,7 @@ done
 case "$MAX_DIFF_LINES" in
   '' | *[!0-9]*) die "--max-diff-lines must be a positive integer" ;;
 esac
+[ "$MAX_DIFF_LINES" -ge 1 ] || die "--max-diff-lines must be a positive integer"
 
 command -v git > /dev/null 2>&1 || die "git is not installed"
 command -v jq > /dev/null 2>&1 || die "jq is not installed"
@@ -71,12 +75,20 @@ has_exact() {
   return 1
 }
 
+# git with unescaped non-ASCII paths in names and diff headers.
+qgit() {
+  git -c core.quotePath=false "$@"
+}
+
 BRANCH=$(git branch --show-current)
 [ -n "$BRANCH" ] || die "detached HEAD: check out the branch first"
+git remote get-url origin > /dev/null 2>&1 || die "no remote named origin: add it or run from a clone"
 
-# Ticket key: first case-insensitive KEY-123 token that starts at a word edge, upper-cased.
+# Ticket candidate: first KEY-123 token at a word edge (two or more leading letters, digits not
+# followed by a dot), upper-cased. Branch names such as update-deps-2024 also match, so the
+# skill must confirm the key with acli before it uses it.
 TICKET=""
-if [[ $BRANCH =~ (^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]+-[0-9]+) ]]; then
+if [[ $BRANCH =~ (^|[^A-Za-z0-9])([A-Za-z]{2,}[A-Za-z0-9]*-[0-9]+)([^.0-9]|$) ]]; then
   TICKET=$(printf '%s' "${BASH_REMATCH[2]}" | tr '[:lower:]' '[:upper:]')
 fi
 
@@ -103,7 +115,7 @@ if [ "$HAVE_GH" = 1 ]; then
       warn "latest PR for this branch is $PR_STATE: treated as no existing PR"
     fi
   elif ! grep -qi 'no pull requests found' "$TMP/pr.err"; then
-    warn "gh pr view failed: $(head -n 1 "$TMP/pr.err")"
+    die "gh pr view failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, or pass --no-network to skip GitHub lookups."
   fi
 fi
 
@@ -143,22 +155,31 @@ if [ -z "$BASE" ]; then
 fi
 [ -n "$BASE" ] || die "cannot determine the base branch: pass --base <branch>"
 
-git remote get-url origin > /dev/null 2>&1 || die "no remote named origin"
-
+# The explicit refspec also stores origin/<base> in single-branch clones.
 if [ "$NO_NETWORK" != 1 ]; then
-  if ! git fetch --quiet origin "$BASE" 2> "$TMP/fetch.err"; then
-    warn "git fetch origin $BASE failed, using the last known origin/$BASE: $(head -n 1 "$TMP/fetch.err")"
-  fi
+  git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2> "$TMP/fetch.err" \
+    || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox, check the network and the remote, or pass --no-network to use the last known origin/$BASE."
 fi
 git rev-parse --verify --quiet "refs/remotes/origin/$BASE^{commit}" > /dev/null \
   || die "origin/$BASE not found: fetch it or pass a different --base"
+if ! git merge-base "origin/$BASE" HEAD > /dev/null 2>&1; then
+  if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+    die "no merge base with origin/$BASE in this shallow clone: run git fetch --unshallow, then run again"
+  fi
+  die "no merge base between HEAD and origin/$BASE: the branches share no history, check --base"
+fi
 
 RANGE="origin/$BASE...HEAD"
 
-git log --no-decorate --format='%h %s' "origin/$BASE..HEAD" | lines_json > "$TMP/commits.json"
-git diff --no-renames --name-only "$RANGE" | lines_json > "$TMP/files.json"
-git diff --no-renames --stat=120 "$RANGE" | head -n "$MAX_STAT_LINES" > "$TMP/stat.txt"
-git diff --no-renames --numstat "$RANGE" > "$TMP/numstat.txt"
+qgit log --no-decorate --format='%h %s' "origin/$BASE..HEAD" | lines_json > "$TMP/commits.json"
+qgit diff --no-renames --name-only "$RANGE" | lines_json > "$TMP/files.json"
+qgit diff --no-renames --stat=120 "$RANGE" > "$TMP/stat.full"
+if [ "$(wc -l < "$TMP/stat.full" | tr -d ' ')" -le "$MAX_STAT_LINES" ]; then
+  cp "$TMP/stat.full" "$TMP/stat.txt"
+else
+  { head -n $((MAX_STAT_LINES - 1)) "$TMP/stat.full"; tail -n 1 "$TMP/stat.full"; } > "$TMP/stat.txt"
+fi
+qgit diff --no-renames --numstat "$RANGE" > "$TMP/numstat.txt"
 INSERTIONS=$(awk '$1 ~ /^[0-9]+$/ { n += $1 } END { print n + 0 }' "$TMP/numstat.txt")
 DELETIONS=$(awk '$2 ~ /^[0-9]+$/ { n += $2 } END { print n + 0 }' "$TMP/numstat.txt")
 
@@ -173,9 +194,9 @@ for g in "${EXCLUDE_GLOBS[@]}"; do
   INCLUDE_SPECS+=(":(glob)$g")
   EXCLUDE_SPECS+=(":(exclude,glob)$g")
 done
-git diff --no-renames --name-only "$RANGE" -- "${INCLUDE_SPECS[@]}" | lines_json > "$TMP/excluded.json"
+qgit diff --no-renames --name-only "$RANGE" -- "${INCLUDE_SPECS[@]}" | lines_json > "$TMP/excluded.json"
 
-git diff --no-renames --no-color "$RANGE" -- . "${EXCLUDE_SPECS[@]}" > "$TMP/diff.full"
+qgit diff --no-renames --no-color "$RANGE" -- . "${EXCLUDE_SPECS[@]}" > "$TMP/diff.full"
 DIFF_LINES=$(wc -l < "$TMP/diff.full" | tr -d ' ')
 TRUNCATED=false
 head -n "$MAX_DIFF_LINES" "$TMP/diff.full" > "$TMP/diff.txt"
@@ -186,13 +207,20 @@ if [ "$(wc -c < "$TMP/diff.txt" | tr -d ' ')" -gt "$MAX_DIFF_BYTES" ]; then
   TRUNCATED=true
 fi
 
-# Upstream status of the current branch.
+# Upstream status. has_upstream is true only when the configured upstream branch has the name of
+# the local branch: `git checkout -b feat origin/main` sets upstream origin/main, and `git push`
+# would not publish feat. upstream always reports the configured upstream (or null).
 HAS_UPSTREAM=false
 UPSTREAM=""
 UNPUSHED=null
 if UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2> /dev/null); then
-  HAS_UPSTREAM=true
-  UNPUSHED=$(git rev-list --count '@{u}..HEAD')
+  UPSTREAM_REF=$(git config --get "branch.$BRANCH.merge" || true)
+  if [ "${UPSTREAM_REF#refs/heads/}" = "$BRANCH" ]; then
+    HAS_UPSTREAM=true
+    UNPUSHED=$(git rev-list --count '@{u}..HEAD')
+  else
+    warn "upstream is $UPSTREAM, not a branch named $BRANCH: publish it with git push -u origin $BRANCH"
+  fi
 else
   UPSTREAM=""
 fi
@@ -252,7 +280,7 @@ jq -n \
   --slurpfile warnings "$TMP/warnings.json" \
   '{
     branch: $branch,
-    ticket: (if $ticket == "" then null else $ticket end),
+    ticket_candidate: (if $ticket == "" then null else $ticket end),
     base: $base,
     base_source: $base_source,
     commit_count: ($commits[0] | length),
