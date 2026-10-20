@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for skills/autopr/scripts/clean-title.sh. Needs only bash.
+# Tests for skills/autopr/scripts/clean-title.sh. Needs bash and jq.
 # The first five cases are ported from the Python CLI (PR #7, test_clean_title_strips_tags).
 set -euo pipefail
 
@@ -42,6 +42,22 @@ check "unmatched bracket stays" "[AN Fix bug" "[AN Fix bug"
 check "round brackets stay" "Fix (AN) bug" "Fix (AN) bug"
 check "tab and newline collapse" "$(printf 'Fix\tthe\nbug')" "Fix the bug"
 check "ticket-like text stays" "Add TLAB-12 support" "Add TLAB-12 support"
+
+# --- hostile summaries: nothing may be expanded or executed ---
+# shellcheck disable=SC2016 # the text must stay literal
+HOSTILE='Show $0 balance for `echo INJECTED` users [AN]'
+# shellcheck disable=SC2016
+CLEAN_HOSTILE='Show $0 balance for `echo INJECTED` users'
+actual=$(printf '%s\n' "$HOSTILE" | "$BASH" "$CLEAN")
+if [ "$actual" = "$CLEAN_HOSTILE" ]; then PASS=$((PASS + 1)); echo "ok   hostile summary on stdin stays literal"; else FAIL=$((FAIL + 1)); echo "FAIL hostile summary on stdin: got [$actual]"; fi
+
+# The documented command from SKILL.md: Jira JSON -> jq -> clean-title.sh -> title file.
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/autopr-clean-test.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+jq -n --arg s "$HOSTILE" '{fields: {summary: $s}}' > "$WORK/jira.json"
+jq -r .fields.summary "$WORK/jira.json" | "$BASH" "$CLEAN" | { printf '[TLAB-1] - '; cat; } > "$WORK/title.txt"
+actual=$(cat "$WORK/title.txt")
+if [ "$actual" = "[TLAB-1] - $CLEAN_HOSTILE" ]; then PASS=$((PASS + 1)); echo "ok   documented jira-to-title pipeline stays literal"; else FAIL=$((FAIL + 1)); echo "FAIL documented pipeline: got [$actual]"; fi
 
 # several arguments join with a space
 actual=$("$BASH" "$CLEAN" "[AN]" "Fix" "bug")
