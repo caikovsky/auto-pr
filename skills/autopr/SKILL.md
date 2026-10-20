@@ -3,7 +3,7 @@ name: autopr
 description: Creates or updates the GitHub pull request for the current branch. Gathers git context against the up-to-date base branch, reads the Jira ticket named in the branch via acli, fills the repo's PR template, and runs gh. Use when the user says "autopr", "create pr", "open pr", "make pr", "push and open PR", "ship it", "update the pr" or "pr description". Does not review, summarize or comment on existing PRs. Never pushes or commits; it stops if the branch is not pushed.
 license: MIT
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
 ---
 
 # AutoPR
@@ -66,7 +66,7 @@ When `acli` is missing, or the call fails or finds no item, there is no ticket: 
 Write the title and body yourself; call no other AI tool.
 
 **Title:**
-- New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title.
+- New PR with a verified ticket: `[KEY] - <clean title>`. Get the clean title by running `scripts/clean-title.sh "<Jira summary>"`; it removes bracketed tags such as `[AN]`, `[Android]`, `[SPIKE]` and `[PoC]`.
 - New PR without a ticket: derive it from the branch name (`/` to `: `, `-` to a space, title case).
 - Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 

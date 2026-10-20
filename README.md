@@ -37,6 +37,7 @@ The skill triggers on requests such as "autopr", "create pr", "push and open PR"
 
 ```bash
 bash tests/gather.test.sh
+bash tests/clean-title.test.sh
 shellcheck skills/autopr/scripts/*.sh tests/*.sh
 claude plugin validate --strict .
 npx skills add . --list
