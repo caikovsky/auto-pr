@@ -17,8 +17,10 @@ jobs:
       - name: shellcheck
         run: shellcheck skills/autopr/scripts/*.sh tests/*.sh
 
-      - name: gather.sh tests
-        run: bash tests/gather.test.sh
+      - name: Script tests
+        run: |
+          bash tests/gather.test.sh
+          bash tests/title-file.test.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -43,5 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: gather.sh tests under /bin/bash
-        run: /bin/bash tests/gather.test.sh
+      - name: Script tests under /bin/bash
+        run: |
+          /bin/bash tests/gather.test.sh
+          /bin/bash tests/title-file.test.sh

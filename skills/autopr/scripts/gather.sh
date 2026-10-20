@@ -80,8 +80,17 @@ qgit() {
   git -c core.quotePath=false "$@"
 }
 
+# Branch and base names end up in commands run by the skill. Git allows `$`, backticks and
+# backslashes in names, so refuse anything outside a conservative set.
+require_safe_name() { # <kind> <name>
+  case "$2" in
+    '' | *[!A-Za-z0-9._/@+#%,:=~-]*) die "unsafe $1 name '$2': it has characters a shell would expand. Rename the branch or pass another base." ;;
+  esac
+}
+
 BRANCH=$(git branch --show-current)
 [ -n "$BRANCH" ] || die "detached HEAD: check out the branch first"
+require_safe_name branch "$BRANCH"
 git remote get-url origin > /dev/null 2>&1 || die "no remote named origin: add it or run from a clone"
 
 # Ticket candidate: first KEY-123 token at a word edge (two or more leading letters, digits not
@@ -161,6 +170,7 @@ if [ -z "$BASE" ]; then
   done
 fi
 [ -n "$BASE" ] || die "cannot determine the base branch: pass --base <branch>"
+require_safe_name base "$BASE"
 
 # The explicit refspec also stores origin/<base> in single-branch clones.
 if [ "$NO_NETWORK" != 1 ]; then
@@ -179,11 +189,12 @@ fi
 RANGE="origin/$BASE...HEAD"
 
 qgit log --no-decorate --format='%h %s' "origin/$BASE..HEAD" | lines_json > "$TMP/commits.json"
-# Issues the branch closes: "closes|fixes|resolves #N" (any tense, optional colon) in its commit
-# messages. Bare #N is ignored: it is usually a PR number, as in "Add feature (#7)".
+# Issues the branch closes: "closes|fixes|resolves #N" (any tense, optional colon, digits must end
+# at a word boundary) in its commit messages. Bare #N is ignored: it is usually a PR number, as in
+# "Add feature (#7)".
 git log --format=%B "origin/$BASE..HEAD" > "$TMP/messages.txt"
-{ grep -Eio '(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+' "$TMP/messages.txt" || true; } \
-  | { grep -Eo '[0-9]+$' || true; } | sort -nu \
+{ grep -Eio '(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+([^[:alnum:]]|$)' "$TMP/messages.txt" || true; } \
+  | { grep -Eo '#[0-9]+' || true; } | tr -d '#' | sort -nu \
   | jq -Rn '[inputs | select(length > 0) | tonumber]' > "$TMP/linked.json"
 qgit diff --no-renames --name-only "$RANGE" | lines_json > "$TMP/files.json"
 qgit diff --no-renames --stat=120 "$RANGE" > "$TMP/stat.full"

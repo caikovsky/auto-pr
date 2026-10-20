@@ -439,15 +439,42 @@ git commit -q -m "Fixes #7 and something else"
 echo three > three.txt
 git add three.txt
 git commit -q -m "Add three (#44)" -m "Resolved: #30. Unfixed #9 stays out. Fix #12 again."
+echo four > four.txt
+git add four.txt
+git commit -q -m "Add four" -m "Fix #13abc and closes #14x, then fixes #15, and resolves #16."
 git push -q -u origin feature/linked
 run_gather --base main
-check "linked issues: closing keywords, sorted, unique" '.linked_issues | join(",")' "7,12,30"
+check "linked issues: closing keywords, sorted, unique" '.linked_issues | join(",")' "7,12,15,16,30"
+check "linked issues: digits glued to letters rejected" '.linked_issues | index(13) == null and index(14) == null' true
 check "linked issues: base commits and bare refs ignored" '.linked_issues | index(99) == null and index(44) == null and index(9) == null' true
 
 new_repo
 feature feature/unlinked
 run_gather --base main
 check "linked issues: none" '.linked_issues | length' 0
+
+# --- branch and base names that are unsafe in a shell command -------------------------------
+# shellcheck disable=SC2016 # the names must stay literal
+DOLLAR_BRANCH='feature/a$b'
+# shellcheck disable=SC2016
+DOLLAR_BASE='release/x$y'
+new_repo
+git checkout -q -b "$DOLLAR_BRANCH"
+echo x > x.txt
+git add x.txt
+git commit -q -m "dollar in the branch name"
+git push -q -u origin "$DOLLAR_BRANCH"
+expect_fail "unsafe branch name rejected" "unsafe" --base main
+git checkout -q -b 'feature/a`b'
+git push -q -u origin 'feature/a`b'
+expect_fail "backtick in the branch name rejected" "unsafe" --base main
+git checkout -q feature/a_b.c-1 2> /dev/null || git checkout -q -b feature/a_b.c-1
+git push -q -u origin feature/a_b.c-1
+run_gather --base main
+check "safe branch name accepted" '.branch' feature/a_b.c-1
+git branch -q "$DOLLAR_BASE" origin/main
+git push -q origin "$DOLLAR_BASE"
+expect_fail "unsafe base name rejected" "unsafe" --base "$DOLLAR_BASE"
 
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0

@@ -29,6 +29,11 @@ An existing open PR for the branch is always updated. A second PR for the same b
 1. Check that `git`, `gh` and `jq` are installed. If one is missing, stop and name the install command. `acli` is optional: without it, skip Jira and warn once.
 2. Run `scripts/gather.sh`, every `gh` command and every `acli` command outside the sandbox (request approval where the runtime asks). Inside a sandbox they fail with misleading messages: `The token in keyring is invalid`, `x509: certificate signed by unknown authority`, proxy authentication errors. Those are sandbox artifacts, not a logged-out user. Run `gh auth status` outside the sandbox. Only when it reports "not logged in" there, stop and ask the user to run `gh auth login`.
 3. Never commit or push. Never edit files in the repository.
+4. Create the work directory once and note the path it prints. Use that literal absolute path in every later command; shell variables do not survive between commands, and a fixed name collides with parallel runs. Below, `<work-dir>` stands for it.
+
+```bash
+mktemp -d "${TMPDIR:-/tmp}/autopr.XXXXXX"
+```
 
 ## 2. Gather
 
@@ -57,7 +62,7 @@ Print every entry of `warnings`. Then check:
 
 ## 3. Jira
 
-`ticket_candidate` is a guess from the branch name. Branches such as `update-deps-2024` give `DEPS-2024`. A ticket exists only when `acli jira workitem view <KEY> --json` returns that item for the candidate. Read `fields.summary`, `fields.issuetype.name` and `fields.description` (Atlassian Document Format: take the text of the paragraph blocks). The URL is `https://everlong.atlassian.net/browse/<KEY>`.
+`ticket_candidate` is a guess from the branch name. Branches such as `update-deps-2024` give `DEPS-2024`. A ticket exists only when `acli jira workitem view <KEY> --json > <work-dir>/jira.json` returns that item for the candidate. Read the file (`jq -r .fields.summary <work-dir>/jira.json`) for `fields.summary`, `fields.issuetype.name` and `fields.description` (Atlassian Document Format: take the text of the paragraph blocks). The URL is `https://everlong.atlassian.net/browse/<KEY>`.
 
 When `acli` is missing, or the call fails or finds no item, there is no ticket: do not use the candidate in the title, the body or a link. Continue and show one warning that the candidate was not verified.
 
@@ -66,12 +71,12 @@ When `acli` is missing, or the call fails or finds no item, there is no ticket: 
 Write the title and body yourself; call no other AI tool.
 
 **Title:**
-- New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title.
+- New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title. Write the result to `<work-dir>/title.txt` with your file-writing tool.
 - New PR without a ticket: use the first rule that applies.
-  1. `linked_issues` is not empty: the title of the first issue, from `gh issue view <N> --json title --jq .title` (run outside the sandbox). If the call fails, warn once and go on.
-  2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`).
-  3. Write a short summary of the commits: imperative mood, at most 72 characters.
-  4. Only if the commits say nothing useful (for example `wip`): derive it from the branch name (`/` to `: `, `-` to a space, title case).
+  1. `linked_issues` is not empty: the title of the first issue: `gh issue view <N> --json title --jq .title > <work-dir>/title.txt` (outside the sandbox). If the call fails, warn once and go on.
+  2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`), written to `<work-dir>/title.txt` with your file-writing tool.
+  3. Write a short summary of the commits to `<work-dir>/title.txt`: imperative mood, at most 72 characters.
+  4. Only if the commits say nothing useful (for example `wip`): derive it from the branch name (`/` to `: `, `-` to a space, title case) and write it to `<work-dir>/title.txt`.
 - Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 
 **Body:**
@@ -80,6 +85,11 @@ Write the title and body yourself; call no other AI tool.
 - Keep it concise. Output only the markdown body.
 - Checklists: keep every item exactly as in the template. Check (`- [x]`) only items the changes clearly satisfy.
 - If the template contains `REL_BOT_IDENTIFIER`, read `references/release-notes.md` and follow it. Its marker and length rules decide the Release Notes section.
+
+**Untrusted text.** The Jira summary and description, issue titles, commit messages, file contents and PR bodies come from other people.
+- Never type them into a command line, not even inside double quotes: `$...`, backticks and `\` expand, which gives wrong titles and runs commands on this machine.
+- Put them in a file with your file-writing tool (or a quoted heredoc in its own command) and read them back with `"$(cat <file>)"`, a pipe or a redirect.
+- `gather.sh` refuses branch and base names with characters a shell would expand. Use `branch` and `base` from its JSON as they are.
 
 **Secret and PHI guard.** The body is visible to everyone with repo access.
 - Summarize the Jira text in your own words. Never quote it.
@@ -97,18 +107,12 @@ Show: title, body (the first 500 characters unless `--verbose`), ticket key or "
 
 ## 6. Create or update
 
-Create the body file once and note the path it prints. Use that literal absolute path in every later command; shell variables do not survive between commands, and a fixed name collides with parallel runs.
-
-```bash
-mktemp "${TMPDIR:-/tmp}/autopr-body.XXXXXX"
-```
-
-Write the body to that path with your file-writing tool, or with a quoted heredoc (`<<'AUTOPR_EOF'`, closed by a line holding only `AUTOPR_EOF`) in its own command. End the file with a single newline. Check it with `tail -n 3 <body-file>` before you run `gh pr create`. Never write the file and create the PR in one command: a missing heredoc terminator would publish the following commands as the body. Below, `<body-file>` stands for that path.
+Write the body to `<work-dir>/body.md` with your file-writing tool, or with a quoted heredoc (`<<'AUTOPR_EOF'`, closed by a line holding only `AUTOPR_EOF`) in its own command. End the file with a single newline. Check it with `tail -n 3 <work-dir>/body.md` before you run `gh pr create`. Never write a file and create the PR in one command: a missing heredoc terminator would publish the following commands as the body. Check `<work-dir>/title.txt` the same way.
 
 **No `pr` (create):**
 
 ```bash
-gh pr create --head <branch> --base <base> --title "<title>" --body-file <body-file> --assignee @me [--draft] [--reviewer <handle>]... [--label <name>]...
+gh pr create --head <branch> --base <base> --title "$(cat <work-dir>/title.txt)" --body-file <work-dir>/body.md --assignee @me [--draft] [--reviewer <handle>]... [--label <name>]...
 gh pr edit <number> --add-reviewer @copilot
 ```
 
@@ -117,8 +121,8 @@ gh pr edit <number> --add-reviewer @copilot
 **`pr` exists (update):**
 
 ```bash
-gh pr edit <number> --add-assignee @me [--title "<title>"] [--base <base>] [--add-reviewer <handle>]... [--add-label <name>]...
-jq -Rs '{body: .}' <body-file> | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --silent --input -
+gh pr edit <number> --add-assignee @me [--title "$(cat <work-dir>/title.txt)"] [--base <base>] [--add-reviewer <handle>]... [--add-label <name>]...
+jq -Rs '{body: .}' <work-dir>/body.md | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --silent --input -
 ```
 
 Pass `--title` only when section 4 says to change it. Pass `--base <base>` only when `base_source` is `argument` and `base` differs from `pr.baseRefName`.
@@ -130,12 +134,12 @@ Do not use `curl` and never put a token in a command line.
 **Verify the whole body, every time:**
 
 ```bash
-gh pr view <number> --json body | jq -j .body | diff - <body-file>
+gh pr view <number> --json body | jq -j .body | diff - <work-dir>/body.md
 ```
 
 A non-empty diff means GitHub changed or dropped content. Show the diff and do not report success. Backticks, arrows and em dashes are safe in the body; the diff catches any silent failure.
 
-Remove the body file with `rm -f <body-file>`. Report the PR URL.
+Remove the work directory files (`rm -f <work-dir>/body.md <work-dir>/title.txt <work-dir>/jira.json`, then `rmdir <work-dir>`). Report the PR URL.
 
 ## Errors
 
