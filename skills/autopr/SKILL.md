@@ -1,6 +1,6 @@
 ---
 name: autopr
-description: AI-powered PR creation tool. Gathers git context, fetches Jira ticket from branch name via acli, finds PR templates, generates a professional PR description, creates/updates the PR via gh CLI, and can post a review request to Slack channel C0AUU2B9D54 when explicitly requested. Use ALWAYS when the user asks to create/update a pull request, including phrases like "autopr", "create pr", "generate pr", "make pr", "open pr", "pr description", or any request to open or update a PR.
+description: AI-powered PR creation tool. Gathers git context, fetches Jira ticket from branch name via acli, finds PR templates, generates a professional PR description, creates/updates the PR via gh CLI. Use ALWAYS when the user asks to create/update a pull request, including phrases like "autopr", "create pr", "generate pr", "make pr", "open pr", "pr description", or any request to open or update a PR.
 license: MIT
 metadata:
   version: "1.4.1"
@@ -91,7 +91,6 @@ Parse the user's arguments to determine mode and options:
 | `--update` or `-u` | Update existing PR (skip prompt) | false |
 | `--new` | Create new PR (skip prompt) | false |
 | `--verbose` or `-v` | Show full PR description | false |
-| `--slack` | Post a Slack review request after success | false |
 | (no args) | Normal interactive mode | - |
 
 ### Phase 1: Parallel Data Gathering (4 subagents)
@@ -294,27 +293,6 @@ Note: `gh pr create --body-file` works reliably for new PRs. The silent failure 
 **Post-create/update:** Always verify the body by reading it back with `gh api` or `gh pr view`.
 
 Report the PR URL on success.
-
-### Phase 6: Optional Slack Review Request
-
-Default: do not send a Slack message. Skip this phase without prompting.
-
-Only after a successful create/update, post a review request when the user explicitly asks for a Slack message in the current request or passes `--slack`. A request to create or update a PR alone does not authorize a Slack message. Always skip this phase for `--dry-run`.
-
-**Channel:** `C0AUU2B9D54` (https://league.enterprise.slack.com/archives/C0AUU2B9D54)
-
-Use the `mcp__claude_ai_Slack__slack_send_message` tool with:
-- `channel_id`: `C0AUU2B9D54`
-- `message`: short review-request text that includes the PR title and URL. Example:
-
-```
-:eyes: Review please — <PR title>
-<PR URL>
-```
-
-If a Jira ticket was found, prefix the title with the key (already done in the PR title). Keep the message brief.
-
-**Failure handling:** If the Slack tool is unavailable or the post fails, surface the error to the user but do NOT roll back the PR. Always report the PR URL regardless of Slack outcome.
 
 ## Error Handling
 

@@ -1,6 +1,6 @@
 # autopr
 
-A Claude skill that creates and updates GitHub pull requests. It gathers git context, fetches the Jira ticket named in the branch via acli, finds the PR template, writes the PR description, and creates or updates the PR with the gh CLI. It posts a review request to Slack only when asked.
+A Claude skill that creates and updates GitHub pull requests. It gathers git context, fetches the Jira ticket named in the branch via acli, finds the PR template, writes the PR description, and creates or updates the PR with the gh CLI.
 
 ## Requirements
 
