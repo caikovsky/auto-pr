@@ -476,6 +476,31 @@ git branch -q "$DOLLAR_BASE" origin/main
 git push -q origin "$DOLLAR_BASE"
 expect_fail "unsafe base name rejected" "unsafe" --base "$DOLLAR_BASE"
 
+# --- names that start with # or - and non-ASCII names ---------------------------------------
+new_repo
+git checkout -q -b '#lead'
+echo x > x.txt
+git add x.txt
+git commit -q -m "leading hash"
+git push -q -u origin '#lead'
+expect_fail "leading # in the branch name rejected" "not starting with # or -" --base main
+new_repo
+feature feature/dash
+git update-ref refs/heads/-x HEAD
+git symbolic-ref HEAD refs/heads/-x
+expect_fail "leading - in the branch name rejected" "not starting with # or -" --base main
+git symbolic-ref HEAD refs/heads/feature/dash
+expect_fail "leading # in the base name rejected" "not starting with # or -" --base '#lead'
+expect_fail "leading - in the base name rejected" "not starting with # or -" --base -x
+new_repo
+git checkout -q -b "feature/café"
+echo x > x.txt
+git add x.txt
+git commit -q -m "accent"
+git push -q -u origin "feature/café"
+expect_fail "non-ASCII name rejected" "ASCII letters, digits and ._/@+#%,:=~-" --base main
+if grep -qF "characters a shell would expand" "$ERR"; then bad "refusal message: old wording gone" "no old wording" "$(cat "$ERR")"; else ok "refusal message: old wording gone"; fi
+
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0
 expect_fail "max-diff-lines text rejected" "positive integer" --max-diff-lines abc

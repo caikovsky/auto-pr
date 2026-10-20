@@ -92,7 +92,7 @@ Write the title and body yourself; call no other AI tool.
 **Untrusted text.** The Jira summary and description, issue titles, commit messages, file contents and PR bodies come from other people.
 - Never type them into a command line, not even inside double quotes: `$...`, backticks and `\` expand, which gives wrong titles and runs commands on this machine.
 - Put them in a file with your file-writing tool (or a quoted heredoc in its own command) and read them back with `"$(cat <file>)"`, a pipe or a redirect.
-- `gather.sh` refuses branch and base names with characters a shell would expand. Use `branch` and `base` from its JSON as they are.
+- `gather.sh` refuses branch and base names that use anything but ASCII letters, digits and `._/@+#%,:=~-`, or that start with `#` or `-`. Put branch, base, reviewer and label values in single quotes in commands, as the examples below do. Issue and PR numbers and ticket keys have a fixed safe shape.
 
 **Secret and PHI guard.** The body is visible to everyone with repo access.
 - Summarize the Jira text in your own words. Never quote it.
@@ -115,7 +115,7 @@ Write the body to `<work-dir>/body.md` with your file-writing tool, or with a qu
 **No `pr` (create):**
 
 ```bash
-gh pr create --head <branch> --base <base> --title "$(cat <work-dir>/title.txt)" --body-file <work-dir>/body.md --assignee @me [--draft] [--reviewer <handle>]... [--label <name>]...
+gh pr create --head '<branch>' --base '<base>' --title "$(cat <work-dir>/title.txt)" --body-file <work-dir>/body.md --assignee @me [--draft] [--reviewer '<handle>']... [--label '<name>']...
 gh pr edit <number> --add-reviewer @copilot
 ```
 
@@ -124,7 +124,7 @@ gh pr edit <number> --add-reviewer @copilot
 **`pr` exists (update):**
 
 ```bash
-gh pr edit <number> --add-assignee @me [--title "$(cat <work-dir>/title.txt)"] [--base <base>] [--add-reviewer <handle>]... [--add-label <name>]...
+gh pr edit <number> --add-assignee @me [--title "$(cat <work-dir>/title.txt)"] [--base '<base>'] [--add-reviewer '<handle>']... [--add-label '<name>']...
 jq -Rs '{body: .}' <work-dir>/body.md | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --silent --input -
 ```
 

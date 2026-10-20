@@ -81,10 +81,14 @@ qgit() {
 }
 
 # Branch and base names end up in commands run by the skill. Git allows `$`, backticks and
-# backslashes in names, so refuse anything outside a conservative set.
+# backslashes in names, an unquoted leading `#` starts a shell comment and a leading `-` reads as
+# a flag, so refuse anything outside a conservative set. LC_ALL=C keeps the ranges ASCII.
 require_safe_name() { # <kind> <name>
+  local LC_ALL=C
   case "$2" in
-    '' | *[!A-Za-z0-9._/@+#%,:=~-]*) die "unsafe $1 name '$2': it has characters a shell would expand. Rename the branch or pass another base." ;;
+    '' | -* | '#'* | *[!A-Za-z0-9._/@+#%,:=~-]*)
+      die "unsafe $1 name '$2': allowed characters are ASCII letters, digits and ._/@+#%,:=~- (not starting with # or -). Rename the branch or pass another base."
+      ;;
   esac
 }
 

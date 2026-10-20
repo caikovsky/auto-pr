@@ -49,6 +49,15 @@ else
   PASS=$((PASS + 1)); echo "ok   SKILL.md has no --title/--body literal in a command"
 fi
 
+# Docs lint: in the command examples (fenced code blocks), a branch, base, handle or label
+# placeholder after a flag must be single-quoted: an unquoted `#` starts a shell comment and
+# `<branch>` could hold anything git allows in a ref name.
+if awk '/^ *```/ { inside = !inside; next } inside' "$SKILL" | grep -nE -- "--[a-z-]+ <(branch|base|handle|name)>"; then
+  FAIL=$((FAIL + 1)); echo "FAIL SKILL.md has an unquoted branch/base/handle/name placeholder after a flag"
+else
+  PASS=$((PASS + 1)); echo "ok   SKILL.md quotes branch/base/handle/name placeholders in commands"
+fi
+
 echo
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]
