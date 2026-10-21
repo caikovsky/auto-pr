@@ -210,19 +210,17 @@ if [ "$HAVE_GH" = 1 ]; then
     REPO_VIEW_FAILED=$(head -n 1 "$TMP/repo.err")
   fi
 
-  # Where could this branch's PR live? --repo fixes it. Otherwise: the repository of origin, its
-  # parent, and the repository of every other remote (upstream). `gh pr list --head` is the
+  # Where could this branch's PR live? The repository of origin, its parent, the repository of
+  # every other remote (upstream), and --repo when it names another one. Every open PR found is
+  # reported in open_prs; --repo and --pr only choose among them. `gh pr list --head` is the
   # documented filter by head branch name; it cannot take owner:branch, and `gh pr view <branch>`
   # may return a PR from another fork with the same branch name, so the head owner is checked here.
-  if [ -n "$REPO_ARG" ]; then
-    add_candidate "$REPO_ARG"
-  else
-    add_candidate "$HEAD_REPO"
-    add_candidate "$VIEW_PARENT"
-    while IFS= read -r remote; do
-      [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")"
-    done < <(git remote)
-  fi
+  [ -z "$REPO_ARG" ] || add_candidate "$REPO_ARG"
+  add_candidate "$HEAD_REPO"
+  add_candidate "$VIEW_PARENT"
+  while IFS= read -r remote; do
+    [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")"
+  done < <(git remote)
   HEAD_OWNER="${HEAD_REPO%%/*}"
   FIRST_CANDIDATE=1
   PR_LOOKUP=none
@@ -247,24 +245,23 @@ if [ "$HAVE_GH" = 1 ]; then
     FIRST_CANDIDATE=0
   done
   # A renamed repository redirects, so the same PR can come back from two candidates: keep one
-  # per URL. Several open PRs from one branch (the fork and the parent, or two bases in one
-  # repository) are ambiguous, unless --pr names one or --base names the base of exactly the
-  # ones to keep. --base only narrows an ambiguous lookup: a single PR stays, because --base on an
-  # existing PR changes its base.
+  # per URL. open_prs is that full list. Several open PRs from one branch (the fork and the
+  # parent, or two bases in one repository) are ambiguous. Only the user's explicit choice picks
+  # one: --pr <number> (the number, in --repo's repository when it is given) or --repo alone (the
+  # PR in that repository). --base never selects a PR: it sets the base of the diff and of a new
+  # PR, and changes the base of the one PR that is selected.
   jq -sc 'unique_by(.url)' "$TMP/open-all.ndjson" > "$TMP/open-all.json"
+  jq -c --arg r "$(lower "$REPO_ARG")" --argjson n "${PR_ARG:-0}" '
+    [.[] | select(($r == "" or ((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "") | ascii_downcase) == $r))
+                  and ($n == 0 or .number == $n))]' "$TMP/open-all.json" > "$TMP/open-sel.json"
   if [ "$PR_GIVEN" = 1 ]; then
-    jq -c --argjson n "$PR_ARG" '[.[] | select(.number == $n)]' "$TMP/open-all.json" > "$TMP/open-sel.json"
     case "$(jq length "$TMP/open-sel.json")" in
-      0) die "PR #$PR_ARG is not an open PR from this branch (open: $(jq -r '[.[] | "#\(.number)"] | join(", ") | if . == "" then "none" else . end' "$TMP/open-all.json"))" ;;
+      0) die "PR #$PR_ARG is not an open PR from this branch${REPO_ARG:+ in $REPO_ARG} (open: $(jq -r '[.[] | "#\(.number) in \(.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; ""))"] | join(", ") | if . == "" then "none" else . end' "$TMP/open-all.json"))" ;;
       1) ;;
       *) die "PR #$PR_ARG exists in several repositories: add --repo <owner/name>" ;;
     esac
-  else
-    cp "$TMP/open-all.json" "$TMP/open-sel.json"
-    if [ "$(jq length "$TMP/open-sel.json")" -gt 1 ] && [ -n "$BASE_ARG" ]; then
-      jq -c --arg b "$BASE_ARG" '[.[] | select(.baseRefName == $b)]' "$TMP/open-all.json" > "$TMP/open-narrow.json"
-      if [ "$(jq length "$TMP/open-narrow.json")" -ge 1 ]; then cp "$TMP/open-narrow.json" "$TMP/open-sel.json"; fi
-    fi
+  elif [ -n "$REPO_ARG" ] && [ "$(jq length "$TMP/open-sel.json")" -lt "$(jq length "$TMP/open-all.json")" ]; then
+    warn "open PRs from this branch outside $REPO_ARG are not selected: $(jq -r '[.[] | "#\(.number) \(.url)"] | join(", ")' "$TMP/open-all.json")"
   fi
   OPEN_COUNT=$(jq length "$TMP/open-sel.json")
   if [ "$OPEN_COUNT" = 1 ]; then
@@ -532,8 +529,8 @@ else
 fi
 grep -Fxv -- "$TEMPLATE_PATH" "$TMP/templates.list" | lines_json > "$TMP/other-templates.json" || echo '[]' > "$TMP/other-templates.json"
 lines_json < "$TMP/warnings" > "$TMP/warnings.json"
-if [ -s "$TMP/open-sel.json" ]; then
-  jq -c '[.[] | {number, url, repo: (.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")), baseRefName}]' "$TMP/open-sel.json" > "$TMP/open-prs.json"
+if [ -s "$TMP/open-all.json" ]; then
+  jq -c '[.[] | {number, url, repo: (.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")), baseRefName}]' "$TMP/open-all.json" > "$TMP/open-prs.json"
 else
   echo '[]' > "$TMP/open-prs.json"
 fi
