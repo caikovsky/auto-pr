@@ -12,7 +12,8 @@
 #
 # Read-only: never commits, pushes or edits files. Exit 2 on a fatal error (message on stderr):
 # no repo, no origin, detached HEAD, a gh or git fetch failure, or no merge base with the base branch.
-# Network runs fetch refs: origin/<base> (or refs/autopr/base for a fork PR) and origin/<branch>.
+# Network runs fetch refs: origin/<base> (or a private refs/autopr/base-<pid>-<n> for a fork PR,
+# deleted on exit) and origin/<branch>.
 # A shell pipe that closes early (| head) kills the writer with SIGPIPE under pipefail, so every
 # command with long output goes through a temp file instead.
 set -euo pipefail
@@ -100,7 +101,9 @@ ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || die "not inside a git repo
 cd "$ROOT"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/autopr-gather.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+PRIVATE_REF=""
+trap 'rm -rf "$TMP"; if [ -n "$PRIVATE_REF" ]; then git update-ref -d "$PRIVATE_REF" > /dev/null 2>&1 || true; fi' EXIT
+trap 'exit 1' INT TERM HUP
 : > "$TMP/warnings"
 
 warn() {
@@ -217,6 +220,12 @@ if [ "$HAVE_GH" = 1 ]; then
     VIEW_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
     VIEW_PARENT=$(jq -r 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end' "$TMP/repo.json")
     VIEW_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/repo.json")
+    # GitHub's name for origin is the truth: after a transfer or rename the old URL still works
+    # through a redirect, but PRs carry the new owner.
+    if valid_repo "$VIEW_REPO" && [ "$(lower "$VIEW_REPO")" != "$(lower "$HEAD_REPO")" ]; then
+      warn "origin URL names $HEAD_REPO but GitHub says $VIEW_REPO (transferred or renamed): using $VIEW_REPO"
+      HEAD_REPO="$VIEW_REPO"
+    fi
   else
     REPO_VIEW_FAILED=$(head -n 1 "$TMP/repo.err")
   fi
@@ -233,27 +242,53 @@ if [ "$HAVE_GH" = 1 ]; then
     [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")"
   done < <(git remote)
   HEAD_OWNER="${HEAD_REPO%%/*}"
-  FIRST_CANDIDATE=1
   PR_LOOKUP=none
   : > "$TMP/open-all.ndjson"
+  PR_FIELDS=number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state
+  PR_LIST_LIMIT=100
   for candidate in "${CANDIDATES[@]}"; do
-    if GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state all --limit 50 \
-      --json number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state \
-      > "$TMP/pr.list" 2> "$TMP/pr.err"; then
+    # Any candidate that cannot be searched stops the run: an incomplete search could report
+    # none or found while a second PR exists, or let a create go out unchecked.
+    if [ "$PR_GIVEN" = 1 ]; then
+      # An exact number needs no listing: a listing is capped and could hide the PR.
+      if GH_PROMPT_DISABLED=1 gh pr view "$PR_ARG" --repo "$candidate" --json "$PR_FIELDS" \
+        > "$TMP/pr.one" 2> "$TMP/pr.err"; then
+        jq -c '[.]' "$TMP/pr.one" > "$TMP/pr.list"
+      elif grep -qiE 'Could not resolve to a PullRequest|no pull requests found' "$TMP/pr.err"; then
+        echo '[]' > "$TMP/pr.list"
+      else
+        die "gh pr view for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, and check access to $candidate."
+      fi
       jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
-        '[.[] | select(.headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)]' \
-        "$TMP/pr.list" > "$TMP/pr.mine"
-      jq -c '.[] | select(.state == "OPEN") | {number, url, title, body, isDraft, baseRefName, headRefOid}' "$TMP/pr.mine" >> "$TMP/open-all.ndjson"
-      if [ "$(jq -r '[.[] | select(.state == "OPEN")] | length' "$TMP/pr.mine")" = 0 ]; then
-        OTHER_STATE=$(jq -r 'first | .state // empty' "$TMP/pr.mine")
+        '.[] | select(.state == "OPEN" and .headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o) | {number, url, title, body, isDraft, baseRefName, headRefOid}' \
+        "$TMP/pr.list" >> "$TMP/open-all.ndjson"
+    fi
+    # The listing of open PRs from this branch. With --pr it only fills open_prs, so a full page
+    # is a warning; without --pr it decides the result, so a full page is an error.
+    GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state open --limit "$PR_LIST_LIMIT" \
+      --json "$PR_FIELDS" > "$TMP/pr.list" 2> "$TMP/pr.err" \
+      || die "gh pr list for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, and check access to $candidate."
+    if [ "$(jq length "$TMP/pr.list")" -ge "$PR_LIST_LIMIT" ]; then
+      if [ "$PR_GIVEN" = 1 ]; then
+        warn "$PR_LIST_LIMIT open PRs came back for this branch name in $candidate: open_prs may be incomplete"
+      else
+        die "too many PRs for this branch name in $candidate: $PR_LIST_LIMIT open PRs came back, so the list may be incomplete. Pass --pr <number>."
+      fi
+    fi
+    jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
+      '[.[] | select(.state == "OPEN" and .headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)]' \
+      "$TMP/pr.list" > "$TMP/pr.mine"
+    jq -c '.[] | {number, url, title, body, isDraft, baseRefName, headRefOid}' "$TMP/pr.mine" >> "$TMP/open-all.ndjson"
+    if [ "$PR_GIVEN" != 1 ] && [ "$(jq length "$TMP/pr.mine")" = 0 ]; then
+      # Informational only: the latest PR of this branch that is not open (a small query, never
+      # used to decide anything).
+      if GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state all --limit 20 \
+        --json "$PR_FIELDS" > "$TMP/pr.all" 2> /dev/null; then
+        OTHER_STATE=$(jq -r --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
+          '[.[] | select(.headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)] | first | .state // empty' "$TMP/pr.all")
         [ -z "$OTHER_STATE" ] || warn "latest PR for this branch in $candidate is $OTHER_STATE: treated as no existing PR"
       fi
-    elif [ "$FIRST_CANDIDATE" = 1 ]; then
-      die "gh pr list for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring) and log in with gh auth login."
-    else
-      warn "could not list PRs in $candidate: $(head -n 1 "$TMP/pr.err")"
     fi
-    FIRST_CANDIDATE=0
   done
   # A renamed repository redirects, so the same PR can come back from two candidates: keep one
   # per URL. open_prs is that full list. Several open PRs from one branch (the fork and the
@@ -374,8 +409,9 @@ require_safe_name base "$BASE"
 
 # Fetch the base. Normally origin holds it (the explicit refspec also stores origin/<base> in
 # single-branch clones). When the PR targets another repository (a fork PR: origin is the fork),
-# fetch the base from a remote that points at that repository, or by URL, into refs/autopr/base,
-# so a stale fork branch never shapes the diff.
+# fetch the base from a remote that points at that repository, or by URL, into a ref private to
+# this run (removed on exit), so a stale fork branch never shapes the diff and parallel runs in
+# one checkout cannot overwrite each other's base.
 BASE_REMOTE=origin
 BASE_REF="origin/$BASE"
 if [ "$NO_NETWORK" != 1 ] && [ -n "$BASE_REPO" ] && [ -n "$HEAD_REPO" ] && [ "$(lower "$BASE_REPO")" != "$(lower "$HEAD_REPO")" ]; then
@@ -392,29 +428,32 @@ if [ "$NO_NETWORK" != 1 ] && [ -n "$BASE_REPO" ] && [ -n "$HEAD_REPO" ] && [ "$(
     FETCH_FROM=$(printf '%s' "$ORIGIN_URL" | sed -E "s#^(.*[:/])[^/:]+/[^/]+\$#\1$BASE_REPO.git#")
     warn "no local remote points at $BASE_REPO: fetched $BASE from $FETCH_FROM"
   fi
-  git fetch --quiet "$FETCH_FROM" "+refs/heads/$BASE:refs/autopr/base" 2> "$TMP/fetch.err" \
+  PRIVATE_REF="refs/autopr/base-$$-$RANDOM"
+  git fetch --quiet "$FETCH_FROM" "+refs/heads/$BASE:$PRIVATE_REF" 2> "$TMP/fetch.err" \
     || die "git fetch $FETCH_FROM $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
-  BASE_REF="refs/autopr/base"
+  BASE_REF="$PRIVATE_REF"
 elif [ "$NO_NETWORK" != 1 ]; then
   git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2> "$TMP/fetch.err" \
     || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
 fi
 git rev-parse --verify --quiet "$BASE_REF^{commit}" > /dev/null \
   || die "$BASE_REF not found: fetch it or pass a different --base"
-if ! git merge-base "$BASE_REF" HEAD > /dev/null 2>&1; then
+# Pin the commit: every later log and diff uses this id, whatever happens to the ref meanwhile.
+BASE_SHA=$(git rev-parse --verify "$BASE_REF^{commit}")
+if ! git merge-base "$BASE_SHA" HEAD > /dev/null 2>&1; then
   if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
     die "no merge base with $BASE_REF in this shallow clone: run git fetch --unshallow, then run again"
   fi
   die "no merge base between HEAD and $BASE_REF: the branches share no history, check --base"
 fi
 
-RANGE="$BASE_REF...HEAD"
+RANGE="$BASE_SHA...HEAD"
 
-qgit log --no-decorate --format='%h %s' "$BASE_REF..HEAD" | lines_json > "$TMP/commits.json"
+qgit log --no-decorate --format='%h %s' "$BASE_SHA..HEAD" | lines_json > "$TMP/commits.json"
 # Issues the branch closes: "closes|fixes|resolves #N" (any tense, optional colon, digits must end
 # at a word boundary) in its commit messages. Bare #N is ignored: it is usually a PR number, as in
 # "Add feature (#7)".
-git log --format=%B "$BASE_REF..HEAD" > "$TMP/messages.txt"
+git log --format=%B "$BASE_SHA..HEAD" > "$TMP/messages.txt"
 { grep -Eio '(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+([^[:alnum:]]|$)' "$TMP/messages.txt" || true; } \
   | { grep -Eo '#[0-9]+' || true; } | tr -d '#' | sort -nu \
   | jq -Rn '[inputs | select(length > 0) | tonumber]' > "$TMP/linked.json"

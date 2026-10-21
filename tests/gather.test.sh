@@ -37,9 +37,11 @@ self=$(git remote get-url origin 2> /dev/null | repo_of)
 if url=$(git remote get-url upstream 2> /dev/null); then resolved=$(printf '%s' "$url" | repo_of); else resolved="$self"; fi
 arg_repo=""
 head_arg=""
+state_arg="open"
+limit_arg="30"
 prev=""
 for arg in "$@"; do
-  case "$prev" in --repo | -R) arg_repo="$arg" ;; --head) head_arg="$arg" ;; esac
+  case "$prev" in --repo | -R) arg_repo="$arg" ;; --head) head_arg="$arg" ;; --state) state_arg="$arg" ;; --limit) limit_arg="$arg" ;; esac
   prev="$arg"
 done
 resolved="${arg_repo:-$resolved}"
@@ -48,12 +50,31 @@ if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$resolved" = "$FAKE_GH_REDIRECT_FRO
 case "$1 $2" in
   "pr view" | "pr list")
     if [ -n "${FAKE_GH_PR_ERR:-}" ]; then echo "$FAKE_GH_PR_ERR" >&2; exit 1; fi
+    for failing in ${FAKE_GH_FAIL_REPOS:-}; do
+      if [ "$failing" = "$resolved" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+    done
     # Fake PRs (FAKE_GH_PRS, a JSON array, or the single FAKE_GH_PR_JSON) live in the repository
     # named by their URL and are found only there.
     if [ -n "${FAKE_GH_PRS:-}" ]; then prs="$FAKE_GH_PRS"; elif [ -n "${FAKE_GH_PR_JSON:-}" ]; then prs="[$FAKE_GH_PR_JSON]"; else prs="[]"; fi
     here=$(jq -c --arg r "$resolved" --arg h "$head_arg" \
       '[.[] | select((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")) == $r and (($h == "") or .headRefName == $h))]' <<< "$prs")
-    if [ "$1 $2" = "pr list" ]; then printf '%s' "$here"; exit 0; fi
+    if [ "$1 $2" = "pr list" ]; then
+      # Like gh: the state filter applies first, then the limit cuts the list.
+      jq -c --arg st "$state_arg" --argjson lim "$limit_arg" \
+        '[.[] | select($st == "all" or ($st == "open" and .state == "OPEN") or ($st == "closed" and .state == "CLOSED") or ($st == "merged" and .state == "MERGED"))] | .[:$lim]' <<< "$here"
+      exit 0
+    fi
+    case "${3:-}" in
+      '' | -*) number="" ;;
+      *) number="$3" ;;
+    esac
+    if [ -n "$number" ]; then
+      found=$(jq -c --argjson n "$number" --arg r "$resolved" \
+        '[.[] | select(.number == $n and ((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")) == $r))] | first // empty' <<< "$prs")
+      if [ -n "$found" ]; then printf '%s' "$found"; exit 0; fi
+      echo "Could not resolve to a PullRequest with the number of $number. (repository.pullRequest)" >&2
+      exit 1
+    fi
     if [ "$(jq length <<< "$here")" -gt 0 ]; then jq -c '.[0]' <<< "$here"; exit 0; fi
     echo 'no pull requests found for branch "x"' >&2
     exit 1
@@ -131,7 +152,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_FAIL_REPOS FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -141,6 +162,18 @@ feature() {
   git add feature.txt
   git commit -q -m "add feature"
   git push -q -u origin "$1"
+}
+
+# run_gather_in_path <dir> [args]: run_gather with <dir> first on PATH (a wrapper around git).
+run_gather_in_path() {
+  local PATH="$1:$PATH"
+  shift
+  run_gather "$@"
+}
+
+# expect <name> <expected> <actual>
+expect() {
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "$2" "$3"; fi
 }
 
 # origin_repo: owner/repo of the origin remote, as gather.sh derives it from the URL.
@@ -632,7 +665,7 @@ rm -f "\$err"
 exit \$rc
 GERMAN_EOF
 chmod +x "$GERMAN_BIN/git"
-(PATH="$GERMAN_BIN:$PATH"; run_gather --base main)
+run_gather_in_path "$GERMAN_BIN" --base main
 check "head sync: deleted remote head under a non-English git" '.head_status' remote-missing
 check "head sync: deleted remote head has no sha" '.remote_head' null
 check_no "head sync: deleted is not in sync" '.head_in_sync'
@@ -756,11 +789,6 @@ if grep -E '^(pr|repo view|issue)' "$FAKE_GH_LOG" | grep -vE -- '(--repo|-R) |^r
 else
   ok "gh calls: all name their repository"
 fi
-# defensive invariant: if gh names another repository for origin, the target is a guess
-export FAKE_GH_REPO_JSON='{"nameWithOwner":"acme/lib","parent":null,"defaultBranchRef":{"name":"main"}}'
-run_gather
-check "gh names another repo for origin: needs confirmation" '.base_repo_source' needs-confirmation
-unset FAKE_GH_REPO_JSON
 
 # --- open PRs in both the fork and the parent: ask, never pick one --------------------------
 new_fork
@@ -878,6 +906,80 @@ unset FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO
 export FAKE_GH_MISSING="nope/missing"
 expect_fail "--repo that does not exist exits 2" "could not find" --repo nope/missing
 unset FAKE_GH_MISSING FAKE_GH_PRS
+
+# --- the result cap must not hide an open PR ------------------------------------------------
+new_repo
+feature feature/capped
+sha=$(git rev-parse HEAD)
+me_pr=$(pr_json 7 false main OPEN "$sha")
+origin_name=$(origin_repo)
+# 60 newer closed PRs from other forks with this branch name, then mine
+others=$(jq -nc --arg repo "$origin_name" --arg b feature/capped '
+  [range(0; 60) | {number: (2000 + .), url: "https://github.com/\($repo)/pull/\(2000 + .)", title: "x", body: "", isDraft: false, baseRefName: "main", headRefOid: "0", headRefName: $b, headRepositoryOwner: {login: "closer\(.)"}, state: "CLOSED"}]')
+FAKE_GH_PRS=$(jq -c --argjson mine "$me_pr" '. + [$mine]' <<< "$others")
+export FAKE_GH_PRS
+run_gather
+check "cap: an open PR behind 60 closed ones is found" '.pr.number' 7
+# 101 open PRs from other forks, then mine
+others_open=$(jq -nc --arg repo "$origin_name" --arg b feature/capped '
+  [range(0; 101) | {number: (3000 + .), url: "https://github.com/\($repo)/pull/\(3000 + .)", title: "x", body: "", isDraft: false, baseRefName: "main", headRefOid: "0", headRefName: $b, headRepositoryOwner: {login: "forker\(.)"}, state: "OPEN"}]')
+FAKE_GH_PRS=$(jq -c --argjson mine "$me_pr" '. + [$mine]' <<< "$others_open")
+export FAKE_GH_PRS
+expect_fail "cap: a full page is never treated as complete" "too many PRs for this branch name"
+run_gather --pr 7
+check "cap: --pr finds the PR without listing" '.pr.number' 7
+check "cap: --pr gives found" '.pr_lookup' found
+expect_fail "cap: --pr of a PR that does not exist exits 2" "not an open PR from this branch" --pr 9999
+unset FAKE_GH_PRS
+
+# --- a failed lookup in any candidate repository stops the run ------------------------------
+new_fork
+sha=$(git rev-parse HEAD)
+FAKE_GH_PRS="[$(pr_json 7 false main OPEN "$sha" me/lib me)]"
+export FAKE_GH_PRS
+export FAKE_GH_FAIL_REPOS="acme/lib"
+expect_fail "only the second repository fails: exit 2" "gh pr list for acme/lib failed"
+run_gather --no-network
+check "--no-network skips the lookups, so no failure" '.pr_lookup' skipped
+unset FAKE_GH_FAIL_REPOS FAKE_GH_PRS
+
+# --- origin transferred to another owner: the head owner is the canonical one ----------------
+new_repo
+feature feature/transferred
+sha=$(git rev-parse HEAD)
+old_owner=$(origin_repo | cut -d/ -f1)
+repo_name=$(origin_repo | cut -d/ -f2)
+export FAKE_GH_REPO_JSON="{\"nameWithOwner\":\"neworg/$repo_name\",\"parent\":null,\"defaultBranchRef\":{\"name\":\"main\"}}"
+FAKE_GH_PRS="[$(pr_json 5 false main OPEN "$sha" "neworg/$repo_name" neworg)]"
+export FAKE_GH_PRS
+run_gather
+check "origin transfer: the PR from the new owner is found" '.pr.number' 5
+check "origin transfer: head repo is the canonical name" '.head_repo' "neworg/$repo_name"
+check "origin transfer: warned about the URL" ".warnings | map(select(contains(\"neworg/$repo_name\") and contains(\"$old_owner\"))) | length" 1
+run_gather --pr 5
+check "origin transfer: --pr finds it too" '.pr.number' 5
+check "origin transfer: base repo is origin's repository" '.base_repo' "neworg/$repo_name"
+unset FAKE_GH_REPO_JSON FAKE_GH_PRS
+
+# --- the fork base ref is private to the run and gone afterwards ----------------------------
+new_fork
+REAL_GIT=$(command -v git)
+LOGGIT="$WORK/loggit"
+mkdir -p "$LOGGIT"
+cat > "$LOGGIT/git" << LOGGIT_EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$WORK/git-calls.log"
+exec "$REAL_GIT" "\$@"
+LOGGIT_EOF
+chmod +x "$LOGGIT/git"
+: > "$WORK/git-calls.log"
+run_gather_in_path "$LOGGIT"
+check "private base ref: the run sees only its own commit" '.commit_count' 1
+run_gather_in_path "$LOGGIT"
+refs=$(grep -o ':refs/autopr/[A-Za-z0-9_-]*' "$WORK/git-calls.log" | sort -u)
+expect "private base ref: two runs used two different refs" 2 "$(printf '%s\n' "$refs" | grep -c .)"
+if printf '%s\n' "$refs" | grep -qx ':refs/autopr/base'; then bad "private base ref: no shared name" "no refs/autopr/base" "$refs"; else ok "private base ref: no shared name"; fi
+expect "private base ref: nothing is left after the runs" "" "$(git for-each-ref refs/autopr)"
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
 new_fork

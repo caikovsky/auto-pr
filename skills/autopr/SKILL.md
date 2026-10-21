@@ -53,7 +53,7 @@ Run `scripts/gather.sh` from this skill's directory, with the repository as the 
 
 The diff is the merge-base diff against a freshly fetched base, so it holds only this branch's commits and no uncommitted edits. When the PR targets another repository than `origin` (a fork PR), the base comes from that repository, never from the fork's possibly stale branch.
 
-`gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed GitHub PR lookup or `git fetch`, or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
+`gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed GitHub PR lookup in any candidate repository (an incomplete search is never reported as a result), a failed `git fetch`, a branch name with 100 or more open PRs in one repository (the list may be cut: pass `--pr <number>`), or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
 
 Print every entry of `warnings`. Then check:
 
@@ -173,7 +173,7 @@ Remove the work directory files (`rm -f <work-dir>/*.txt <work-dir>/body.md <wor
 | Error | Action |
 |-------|--------|
 | Not in a git repo | Stop: "Not in a git repository." |
-| `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure, no merge base, unknown base). Stop. |
+| `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure in any repository, too many PRs for the branch name, no merge base, unknown base). Stop. |
 | No commits ahead | Stop: "No commits between base and head." |
 | Branch not pushed | Stop with the push command (see section 2). |
 | `gh` missing or logged out | Stop with the install or login command. |
