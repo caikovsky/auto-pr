@@ -108,6 +108,15 @@ for value in found none ambiguous skipped; do
   fi
 done
 
+# The gather.sh options a user can pass through the skill are in the argument table.
+for opt in '--base <branch>' '--repo <owner/name>' '--pr <number>'; do
+  if grep -qF "| \`$opt\`" "$SKILL"; then
+    PASS=$((PASS + 1)); echo "ok   argument table lists $opt"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL argument table does not list $opt"
+  fi
+done
+
 # A heredoc delimiter that is the same every time can collide with the content.
 if grep -nE 'AUTOPR_EOF([^_]|$)' "$SKILL" "$HERE/../skills/autopr/references/"*.md; then
   FAIL=$((FAIL + 1)); echo "FAIL a fixed AUTOPR_EOF heredoc delimiter is documented"

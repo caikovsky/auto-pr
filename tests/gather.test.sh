@@ -43,6 +43,8 @@ for arg in "$@"; do
   prev="$arg"
 done
 resolved="${arg_repo:-$resolved}"
+# A renamed repository: gh follows the redirect and answers with the new repository's data.
+if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$resolved" = "$FAKE_GH_REDIRECT_FROM" ]; then resolved="$FAKE_GH_REDIRECT_TO"; fi
 case "$1 $2" in
   "pr view" | "pr list")
     if [ -n "${FAKE_GH_PR_ERR:-}" ]; then echo "$FAKE_GH_PR_ERR" >&2; exit 1; fi
@@ -125,7 +127,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -789,6 +791,65 @@ check "no open PR: empty list" '.open_prs | length' 0
 run_gather --no-network
 check "no network: skipped and no list" '.open_prs | length' 0
 unset FAKE_GH_PRS
+
+# --- two open PRs from one branch in the same repository (different bases) ------------------
+new_repo
+feature feature/twobases
+git push -q origin main:release
+sha=$(git rev-parse HEAD)
+pr_main=$(pr_json 7 false main OPEN "$sha")
+pr_release=$(pr_json 8 false release OPEN "$sha")
+export FAKE_GH_PRS="[$pr_main,$pr_release]"
+run_gather
+check "same repo, two bases: ambiguous" '.pr_lookup' ambiguous
+check "same repo, two bases: both listed with their base" '.open_prs | map("\(.number):\(.baseRefName)") | sort | join(",")' "7:main,8:release"
+run_gather --base release
+check "--base narrows an ambiguous lookup: found" '.pr_lookup' found
+check "--base release: the release PR" '.pr.number' 8
+check "--base release: only that PR is listed" '.open_prs | length' 1
+run_gather --base main
+check "--base main: the main PR" '.pr.number' 7
+run_gather --pr 7
+check "--pr 7: found" '.pr_lookup' found
+check "--pr 7: the PR" '.pr.number' 7
+check "--pr 7: base repo from the PR" '.base_repo_source' pull-request
+run_gather --pr 8 --base main
+check "--pr beats --base" '.pr.number' 8
+expect_fail "--pr of a PR that is not open from this branch exits 2" "not an open PR from this branch" --pr 99
+for bad in 0 -1 abc 1.5 ''; do
+  expect_fail "--pr '$bad' is rejected" "positive integer" --pr "$bad"
+done
+export FAKE_GH_PRS="[$pr_main]"
+run_gather --base release
+check "--base alone does not hide a single PR (the PR base can change)" '.pr.number' 7
+run_gather --pr 7 --no-network
+check "--pr is ignored with --no-network" '.warnings | map(select(contains("--pr"))) | length' 1
+unset FAKE_GH_PRS
+
+# --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
+new_fork
+sha=$(git rev-parse HEAD)
+fork_pr=$(pr_json 7 false main OPEN "$sha" me/lib me)
+parent_pr=$(pr_json 7 false main OPEN "$sha" acme/lib me)
+export FAKE_GH_PRS="[$fork_pr,$parent_pr]"
+expect_fail "--pr in two repositories needs --repo" "several repositories" --pr 7
+run_gather --pr 7 --repo acme/lib
+check "--pr with --repo: the parent's PR" '.pr.url' https://github.com/acme/lib/pull/7
+unset FAKE_GH_PRS
+
+# --- a renamed repository redirects: the same PR must not count twice -----------------------
+new_fork
+sha=$(git rev-parse HEAD)
+git remote set-url upstream "$DIR/oldacme/lib.git"
+export FAKE_GH_REDIRECT_FROM=oldacme/lib FAKE_GH_REDIRECT_TO=acme/lib
+FAKE_GH_PRS="[$(pr_json 42 false main OPEN "$sha" acme/lib me)]"
+export FAKE_GH_PRS
+run_gather
+check "renamed repo: one PR, not ambiguous" '.pr_lookup' found
+check "renamed repo: listed once" '.open_prs | length' 1
+check "renamed repo: canonical repo name from the URL" '.open_prs[0].repo' acme/lib
+check "renamed repo: the PR" '.pr.number' 42
+unset FAKE_GH_PRS FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO
 
 # --- which repository a fork PR targets: PR, --repo, gh default, then the parent (confirm) ----
 new_fork

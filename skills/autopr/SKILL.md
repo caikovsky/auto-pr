@@ -19,6 +19,7 @@ Write a PR description from the branch diff and the Jira ticket, then create the
 | `--ready` | On update, mark a draft PR ready for review | off |
 | `--base <branch>`, `-b <branch>` | Base branch. On update, a different base also changes the PR base | existing PR base, else repo default branch |
 | `--repo <owner/name>` | Repository the PR targets. Needed for a fork when no PR exists yet and no `gh repo set-default` is set | open PR's repository, else `gh` default, else what `gh` resolves (asks first when that is not `origin`'s repository) |
+| `--pr <number>` | Update exactly this open PR when the branch has several (the skill asks, then reruns with it) | none |
 | `--reviewer <handle>` | Request a review; repeatable | none |
 | `--label <name>` | Add a label; repeatable | none |
 | `--verbose`, `-v` | Show the full body in the preview | off |
@@ -38,7 +39,7 @@ mktemp -d "${TMPDIR:-/tmp}/autopr.XXXXXX"
 
 ## 2. Gather
 
-Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base '<branch>'` and `--repo '<owner/name>'` when the user gave them. It prints one JSON object:
+Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base '<branch>'`, `--repo '<owner/name>'` and `--pr <number>` when the user gave them. It prints one JSON object:
 
 - `branch`, `head_repo` (owner/repo from the `origin` URL itself), `base_repo` (owner/repo the PR targets, or null when GitHub was not asked), `base_repo_source` (`pull-request`, `argument`, `gh-default`, `origin`, `needs-confirmation`, or null), `base_remote` (the local remote that holds the base: `origin`, another remote, or null when it was fetched by URL), `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
@@ -48,7 +49,7 @@ Run `scripts/gather.sh` from this skill's directory, with the repository as the 
 - `template` (`path`, `content`, or null), `other_templates`
 - `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, `headRefOid`, or null), `pr_lookup` (`found`, `none`, `ambiguous` or `skipped`), `open_prs` (every open PR from this branch: `number`, `url`, `repo`, `baseRefName`), `warnings`
 
-`gather.sh` looks for the PR in these repositories, in this order: only `--repo` when it is given; otherwise the repository of `origin`, its parent, then the repository of every other remote. Exactly one open PR gives `found`; none gives `none`; more than one gives `ambiguous`.
+`gather.sh` looks for the PR in these repositories, in this order: only `--repo` when it is given; otherwise the repository of `origin`, its parent, then the repository of every other remote. Exactly one open PR gives `found`; none gives `none`; more than one gives `ambiguous`. `--pr <number>` selects exactly that open PR (exit 2 when it is not an open PR from this branch, or when the number exists in several repositories and `--repo` is missing). A given `--base` narrows an ambiguous lookup to the PRs with that base; it never hides a single PR, because `--base` on an existing PR changes its base. A PR that comes back from two candidates (a renamed repository redirects) counts once.
 
 The diff is the merge-base diff against a freshly fetched base, so it holds only this branch's commits and no uncommitted edits. When the PR targets another repository than `origin` (a fork PR), the base comes from that repository, never from the fork's possibly stale branch.
 
@@ -58,7 +59,7 @@ Print every entry of `warnings`. Then check:
 
 - **Stop** when `commit_count` is 0.
 - **Stop** (unless `--dry-run`) when `pr_lookup` is `skipped`: `pr` is null because nobody asked GitHub, not because no PR exists. Creating a PR from that state can duplicate or mis-base an existing one. Run `gather.sh` again without `--no-network`, outside the sandbox. Treat `pr` as "no PR" only when `pr_lookup` is `none`.
-- **Stop** (unless `--dry-run`) when `pr_lookup` is `ambiguous`: the branch has open PRs in more than one place, for example in the fork and in its parent. Do not pick one and do not create another. List `open_prs` (number, repo, base, url), ask which to update, and run `gather.sh` again with `--repo '<repo of the chosen PR>'`. With `--dry-run`, preview each listed PR.
+- **Stop** (unless `--dry-run`) when `pr_lookup` is `ambiguous`: the branch has open PRs in more than one place, for example in the fork and in its parent. Do not pick one and do not create another. List `open_prs` with repo, number, base and url, ask which to update, and run `gather.sh` again with `--pr <number> --repo '<repo>'`. The pair also settles two PRs from one branch in the same repository (two bases). With `--dry-run`, preview each listed PR.
 - **Stop** (unless `--dry-run`) when `pr_lookup` is `none` and the target is not settled: `base_repo` is null, or it differs from `head_repo` while `base_repo_source` is not `argument` or `gh-default`. Whatever `gh` resolved (a fork's parent, or the `upstream` remote) is a guess, and publishing there could expose internal work to a public repository. Ask the user which repository to target (`base_repo` or `head_repo`) and run `gather.sh` again with `--repo '<owner/name>'`. Do not create the PR without that answer.
 - **Stop** (unless `--dry-run`) when `head_in_sync` is not true: the PR would not show what you are describing. Say which case applies (`head_status`):
   - `remote-missing`: `origin` has no such branch (deleted?). Run `git push -u origin <branch>`.
