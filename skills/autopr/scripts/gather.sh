@@ -165,51 +165,27 @@ if [ "$NO_NETWORK" != 1 ]; then
   fi
 fi
 
-# Existing PR for the current branch (gh resolves fork PRs; no argument).
+# gh picks a repository from the remotes when it is not told (a remote named upstream wins over
+# origin), so every gh call here names its repository. The one exception is `gh repo set-default
+# --view`, which has no --repo flag: it reads the default the user stored.
 echo null > "$TMP/pr.json"
 PR_BASE=""
-if [ "$HAVE_GH" = 1 ]; then
-  if GH_PROMPT_DISABLED=1 gh pr view --json number,url,title,body,isDraft,baseRefName,headRefOid,state \
-    > "$TMP/pr.raw" 2> "$TMP/pr.err"; then
-    PR_STATE=$(jq -r .state "$TMP/pr.raw")
-    if [ "$PR_STATE" = OPEN ]; then
-      jq -c 'del(.state)' "$TMP/pr.raw" > "$TMP/pr.json"
-      PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
-      PR_LOOKUP=found
-    else
-      warn "latest PR for this branch is $PR_STATE: treated as no existing PR"
-      PR_LOOKUP=none
-    fi
-  elif grep -qi 'no pull requests found' "$TMP/pr.err"; then
-    PR_LOOKUP=none
-  else
-    die "gh pr view failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring) and log in with gh auth login."
-  fi
-fi
-
-# Base repository: the repo the PR targets, with where that answer came from
-# (base_repo_source): pull-request (the URL of the open PR), argument (--repo), gh-default
-# (gh repo set-default), origin (gh resolved to the repository origin points at), or
-# needs-confirmation (gh resolved to another repository, as the parent of a fork or as the upstream
-# remote: a guess, and the skill must ask before it publishes there). Unknown (null) without gh.
-BASE_REPO=""
-BASE_REPO_SOURCE=""
-REPO_DEFAULT=""
+VIEW_REPO=""
+VIEW_PARENT=""
+VIEW_DEFAULT=""
 REPO_VIEW_FAILED=""
-if [ -n "$REPO_ARG" ] && [ "$NO_NETWORK" = 1 ]; then
-  warn "--repo is ignored with --no-network: the base repository is not resolved"
-fi
-if [ "$PR_LOOKUP" = found ]; then
-  BASE_REPO=$(jq -r .url "$TMP/pr.json" | sed -nE 's#^https?://[^/]+/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
-  BASE_REPO_SOURCE="pull-request"
-  if [ -n "$REPO_ARG" ] && [ "$(lower "$REPO_ARG")" != "$(lower "$BASE_REPO")" ]; then
-    warn "--repo $REPO_ARG ignored: the open PR targets $BASE_REPO"
-  fi
-elif [ "$HAVE_GH" = 1 ]; then
-  VIEW_REPO=""
-  VIEW_PARENT=""
-  VIEW_DEFAULT=""
-  if GH_PROMPT_DISABLED=1 gh repo view --json nameWithOwner,parent,defaultBranchRef \
+CANDIDATES=()
+add_candidate() { # <owner/repo>: append once, case-insensitively, when it is a valid name
+  local c
+  valid_repo "$1" || return 0
+  for c in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
+    [ "$(lower "$c")" = "$(lower "$1")" ] && return 0
+  done
+  CANDIDATES+=("$1")
+}
+if [ "$HAVE_GH" = 1 ]; then
+  [ -n "$HEAD_REPO" ] || die "origin URL '$ORIGIN_URL' does not name an owner/repo: the GitHub lookups need it"
+  if GH_PROMPT_DISABLED=1 gh repo view "$HEAD_REPO" --json nameWithOwner,parent,defaultBranchRef \
     > "$TMP/repo.json" 2> "$TMP/repo.err"; then
     VIEW_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
     VIEW_PARENT=$(jq -r 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end' "$TMP/repo.json")
@@ -217,6 +193,65 @@ elif [ "$HAVE_GH" = 1 ]; then
   else
     REPO_VIEW_FAILED=$(head -n 1 "$TMP/repo.err")
   fi
+
+  # Where could this branch's PR live? --repo fixes it. Otherwise: the repository of origin, its
+  # parent, and the repository of every other remote (upstream). `gh pr list --head` is the
+  # documented filter by head branch name; it cannot take owner:branch, and `gh pr view <branch>`
+  # may return a PR from another fork with the same branch name, so the head owner is checked here.
+  if [ -n "$REPO_ARG" ]; then
+    add_candidate "$REPO_ARG"
+  else
+    add_candidate "$HEAD_REPO"
+    add_candidate "$VIEW_PARENT"
+    while IFS= read -r remote; do
+      [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")"
+    done < <(git remote)
+  fi
+  HEAD_OWNER="${HEAD_REPO%%/*}"
+  FIRST_CANDIDATE=1
+  PR_LOOKUP=none
+  for candidate in "${CANDIDATES[@]}"; do
+    if GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state all --limit 50 \
+      --json number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state \
+      > "$TMP/pr.list" 2> "$TMP/pr.err"; then
+      jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
+        '[.[] | select(.headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)]' \
+        "$TMP/pr.list" > "$TMP/pr.mine"
+      OPEN_PR=$(jq -c '[.[] | select(.state == "OPEN")] | first // empty' "$TMP/pr.mine")
+      if [ -n "$OPEN_PR" ] && [ "$PR_LOOKUP" = found ]; then
+        warn "another open PR from this branch exists in $candidate: using the first one found"
+      elif [ -n "$OPEN_PR" ]; then
+        printf '%s\n' "$OPEN_PR" | jq -c '{number, url, title, body, isDraft, baseRefName, headRefOid}' > "$TMP/pr.json"
+        PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
+        PR_LOOKUP=found
+      else
+        OTHER_STATE=$(jq -r 'first | .state // empty' "$TMP/pr.mine")
+        [ -z "$OTHER_STATE" ] || warn "latest PR for this branch in $candidate is $OTHER_STATE: treated as no existing PR"
+      fi
+    elif [ "$FIRST_CANDIDATE" = 1 ]; then
+      die "gh pr list for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring) and log in with gh auth login."
+    else
+      warn "could not list PRs in $candidate: $(head -n 1 "$TMP/pr.err")"
+    fi
+    FIRST_CANDIDATE=0
+  done
+fi
+
+# Base repository: the repo the PR targets, with where that answer came from
+# (base_repo_source): pull-request (the URL of the open PR), argument (--repo), gh-default
+# (gh repo set-default), origin (gh says origin's own repository is the target), or
+# needs-confirmation (a repository other than origin's: the parent of a fork, or whatever gh
+# resolved: a guess, and the skill must ask before it publishes there). Unknown (null) without gh.
+BASE_REPO=""
+BASE_REPO_SOURCE=""
+REPO_DEFAULT=""
+if [ -n "$REPO_ARG" ] && [ "$NO_NETWORK" = 1 ]; then
+  warn "--repo is ignored with --no-network: the base repository is not resolved"
+fi
+if [ "$PR_LOOKUP" = found ]; then
+  BASE_REPO=$(jq -r .url "$TMP/pr.json" | sed -nE 's#^https?://[^/]+/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+  BASE_REPO_SOURCE="pull-request"
+elif [ "$HAVE_GH" = 1 ]; then
   GH_DEFAULT=$(GH_PROMPT_DISABLED=1 gh repo set-default --view 2> /dev/null || true)
   GH_DEFAULT=${GH_DEFAULT%%$'\n'*}
   if [ -n "$REPO_ARG" ]; then
