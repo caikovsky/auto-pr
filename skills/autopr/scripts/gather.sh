@@ -27,12 +27,23 @@ die() {
   exit 2
 }
 
-# True for owner/name made of letters, digits, . _ - (also what keeps it safe in a command).
+# True for owner/name: exactly one slash, both parts non-empty, GitHub name characters
+# (letters, digits, . _ -), no part starting with - or . (also what keeps it safe in a command).
 valid_repo() {
+  local LC_ALL=C owner name
   case "$1" in
     */*/* | */ | /* | '') return 1 ;;
+    */*) ;;
+    *) return 1 ;;
   esac
-  [ -z "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9._/-')" ]
+  owner="${1%%/*}"
+  name="${1#*/}"
+  case "$owner$name" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  case "$owner" in -* | .*) return 1 ;; esac
+  case "$name" in -* | .*) return 1 ;; esac
+  return 0
 }
 
 while [ $# -gt 0 ]; do
@@ -125,6 +136,14 @@ BRANCH=$(git branch --show-current)
 [ -n "$BRANCH" ] || die "detached HEAD: check out the branch first"
 require_safe_name branch "$BRANCH"
 git remote get-url origin > /dev/null 2>&1 || die "no remote named origin: add it or run from a clone"
+# head_repo comes from the origin URL itself, never from gh's resolution (gh may resolve a fork
+# clone with an upstream remote to the upstream repository).
+ORIGIN_URL=$(git remote get-url origin)
+HEAD_REPO=$(repo_of_url "$ORIGIN_URL")
+if ! valid_repo "$HEAD_REPO"; then
+  warn "origin URL does not name an owner/repo: fork detection is off"
+  HEAD_REPO=""
+fi
 
 # Ticket candidate: first KEY-123 token at a word edge (two or more leading letters, digits not
 # followed by a dot), upper-cased. Branch names such as update-deps-2024 also match, so the
@@ -170,8 +189,9 @@ fi
 
 # Base repository: the repo the PR targets, with where that answer came from
 # (base_repo_source): pull-request (the URL of the open PR), argument (--repo), gh-default
-# (gh repo set-default), fork-parent (origin is a fork: its parent, a guess the skill must confirm
-# when no PR exists), origin (origin itself). Unknown (null) without gh.
+# (gh repo set-default), origin (gh resolved to the repository origin points at), or
+# needs-confirmation (gh resolved to another repository, as the parent of a fork or as the upstream
+# remote: a guess, and the skill must ask before it publishes there). Unknown (null) without gh.
 BASE_REPO=""
 BASE_REPO_SOURCE=""
 REPO_DEFAULT=""
@@ -207,10 +227,14 @@ elif [ "$HAVE_GH" = 1 ]; then
     BASE_REPO_SOURCE="gh-default"
   elif [ -n "$VIEW_PARENT" ] && valid_repo "$VIEW_PARENT"; then
     BASE_REPO="$VIEW_PARENT"
-    BASE_REPO_SOURCE="fork-parent"
+    BASE_REPO_SOURCE="needs-confirmation"
   elif [ -n "$VIEW_REPO" ]; then
     BASE_REPO="$VIEW_REPO"
-    BASE_REPO_SOURCE="origin"
+    if [ -n "$HEAD_REPO" ] && [ "$(lower "$VIEW_REPO")" = "$(lower "$HEAD_REPO")" ]; then
+      BASE_REPO_SOURCE="origin"
+    else
+      BASE_REPO_SOURCE="needs-confirmation"
+    fi
   fi
   # The default branch of the chosen repository, only needed when nothing else names the base.
   if [ -z "$BASE_ARG" ] && [ -n "$BASE_REPO" ] && valid_repo "$BASE_REPO"; then
@@ -266,12 +290,6 @@ require_safe_name base "$BASE"
 # single-branch clones). When the PR targets another repository (a fork PR: origin is the fork),
 # fetch the base from a remote that points at that repository, or by URL, into refs/autopr/base,
 # so a stale fork branch never shapes the diff.
-ORIGIN_URL=$(git remote get-url origin)
-HEAD_REPO=$(repo_of_url "$ORIGIN_URL")
-if ! valid_repo "$HEAD_REPO"; then
-  warn "origin URL does not name an owner/repo: fork detection is off"
-  HEAD_REPO=""
-fi
 BASE_REMOTE=origin
 BASE_REF="origin/$BASE"
 if [ "$NO_NETWORK" != 1 ] && [ -n "$BASE_REPO" ] && [ -n "$HEAD_REPO" ] && [ "$(lower "$BASE_REPO")" != "$(lower "$HEAD_REPO")" ]; then
