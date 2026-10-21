@@ -99,6 +99,15 @@ else
   PASS=$((PASS + 1)); echo "ok   documented gh api paths do not use {owner}/{repo}"
 fi
 
+# Every pr_lookup value gather.sh can print has a rule in SKILL.md.
+for value in found none ambiguous skipped; do
+  if grep -qF "\`$value\`" "$SKILL"; then
+    PASS=$((PASS + 1)); echo "ok   SKILL.md documents pr_lookup $value"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL SKILL.md does not document pr_lookup $value"
+  fi
+done
+
 # A heredoc delimiter that is the same every time can collide with the content.
 if grep -nE 'AUTOPR_EOF([^_]|$)' "$SKILL" "$HERE/../skills/autopr/references/"*.md; then
   FAIL=$((FAIL + 1)); echo "FAIL a fixed AUTOPR_EOF heredoc delimiter is documented"
