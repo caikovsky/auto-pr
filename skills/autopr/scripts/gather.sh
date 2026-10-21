@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Collect the git and GitHub context for one PR and print it as a single JSON object.
 #
-# Usage: gather.sh [--base <branch>] [--repo <owner/name>] [--no-network] [--max-diff-lines <n>]
+# Usage: gather.sh [--base <branch>] [--repo <owner/name>] [--pr <number>] [--no-network] [--max-diff-lines <n>]
 #   --base <branch>        base branch; overrides the existing PR and the repo default
 #   --repo <owner/name>    repository the PR targets (a fork PR targets the parent); ignored when an
 #                          open PR already fixes it, and with --no-network
+#   --pr <number>          pick this open PR from the branch when several are open (an error when it
+#                          is not one of them); with --repo the number is read in that repository
 #   --no-network           skip git fetch and every gh call (also AUTOPR_NO_NETWORK=1)
 #   --max-diff-lines <n>   cut the diff after n lines (default 1200, also AUTOPR_MAX_DIFF_LINES)
 #
@@ -17,6 +19,8 @@ set -euo pipefail
 
 BASE_ARG=""
 REPO_ARG=""
+PR_ARG=""
+PR_GIVEN=0
 NO_NETWORK="${AUTOPR_NO_NETWORK:-0}"
 MAX_DIFF_LINES="${AUTOPR_MAX_DIFF_LINES:-1200}"
 MAX_DIFF_BYTES=200000
@@ -58,6 +62,12 @@ while [ $# -gt 0 ]; do
       REPO_ARG="$2"
       shift 2
       ;;
+    --pr)
+      [ $# -ge 2 ] || die "--pr needs a PR number"
+      PR_ARG="$2"
+      PR_GIVEN=1
+      shift 2
+      ;;
     --no-network)
       NO_NETWORK=1
       shift
@@ -73,6 +83,11 @@ done
 
 if [ -n "$REPO_ARG" ] && ! valid_repo "$REPO_ARG"; then
   die "--repo must look like owner/name (letters, digits, . _ -)"
+fi
+if [ "$PR_GIVEN" = 1 ]; then
+  case "$PR_ARG" in
+    '' | 0* | *[!0-9]*) die "--pr must be a positive integer (no leading zero)" ;;
+  esac
 fi
 case "$MAX_DIFF_LINES" in
   '' | *[!0-9]*) die "--max-diff-lines must be a positive integer" ;;
@@ -211,8 +226,7 @@ if [ "$HAVE_GH" = 1 ]; then
   HEAD_OWNER="${HEAD_REPO%%/*}"
   FIRST_CANDIDATE=1
   PR_LOOKUP=none
-  : > "$TMP/open-full.ndjson"
-  : > "$TMP/open-list.ndjson"
+  : > "$TMP/open-all.ndjson"
   for candidate in "${CANDIDATES[@]}"; do
     if GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state all --limit 50 \
       --json number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state \
@@ -220,8 +234,7 @@ if [ "$HAVE_GH" = 1 ]; then
       jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
         '[.[] | select(.headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)]' \
         "$TMP/pr.list" > "$TMP/pr.mine"
-      jq -c '.[] | select(.state == "OPEN") | {number, url, title, body, isDraft, baseRefName, headRefOid}' "$TMP/pr.mine" >> "$TMP/open-full.ndjson"
-      jq -c --arg r "$candidate" '.[] | select(.state == "OPEN") | {number, url, repo: $r, baseRefName}' "$TMP/pr.mine" >> "$TMP/open-list.ndjson"
+      jq -c '.[] | select(.state == "OPEN") | {number, url, title, body, isDraft, baseRefName, headRefOid}' "$TMP/pr.mine" >> "$TMP/open-all.ndjson"
       if [ "$(jq -r '[.[] | select(.state == "OPEN")] | length' "$TMP/pr.mine")" = 0 ]; then
         OTHER_STATE=$(jq -r 'first | .state // empty' "$TMP/pr.mine")
         [ -z "$OTHER_STATE" ] || warn "latest PR for this branch in $candidate is $OTHER_STATE: treated as no existing PR"
@@ -233,14 +246,34 @@ if [ "$HAVE_GH" = 1 ]; then
     fi
     FIRST_CANDIDATE=0
   done
-  OPEN_COUNT=$(wc -l < "$TMP/open-full.ndjson" | tr -d ' ')
+  # A renamed repository redirects, so the same PR can come back from two candidates: keep one
+  # per URL. Several open PRs from one branch (the fork and the parent, or two bases in one
+  # repository) are ambiguous, unless --pr names one or --base names the base of exactly the
+  # ones to keep. --base only narrows an ambiguous lookup: a single PR stays, because --base on an
+  # existing PR changes its base.
+  jq -sc 'unique_by(.url)' "$TMP/open-all.ndjson" > "$TMP/open-all.json"
+  if [ "$PR_GIVEN" = 1 ]; then
+    jq -c --argjson n "$PR_ARG" '[.[] | select(.number == $n)]' "$TMP/open-all.json" > "$TMP/open-sel.json"
+    case "$(jq length "$TMP/open-sel.json")" in
+      0) die "PR #$PR_ARG is not an open PR from this branch (open: $(jq -r '[.[] | "#\(.number)"] | join(", ") | if . == "" then "none" else . end' "$TMP/open-all.json"))" ;;
+      1) ;;
+      *) die "PR #$PR_ARG exists in several repositories: add --repo <owner/name>" ;;
+    esac
+  else
+    cp "$TMP/open-all.json" "$TMP/open-sel.json"
+    if [ "$(jq length "$TMP/open-sel.json")" -gt 1 ] && [ -n "$BASE_ARG" ]; then
+      jq -c --arg b "$BASE_ARG" '[.[] | select(.baseRefName == $b)]' "$TMP/open-all.json" > "$TMP/open-narrow.json"
+      if [ "$(jq length "$TMP/open-narrow.json")" -ge 1 ]; then cp "$TMP/open-narrow.json" "$TMP/open-sel.json"; fi
+    fi
+  fi
+  OPEN_COUNT=$(jq length "$TMP/open-sel.json")
   if [ "$OPEN_COUNT" = 1 ]; then
-    cp "$TMP/open-full.ndjson" "$TMP/pr.json"
+    jq -c '.[0]' "$TMP/open-sel.json" > "$TMP/pr.json"
     PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
     PR_LOOKUP=found
   elif [ "$OPEN_COUNT" -gt 1 ]; then
     PR_LOOKUP=ambiguous
-    warn "$OPEN_COUNT open PRs come from this branch: none is chosen, see open_prs"
+    warn "$OPEN_COUNT open PRs come from this branch: none is chosen, see open_prs (--pr <number> picks one)"
   fi
 fi
 
@@ -254,6 +287,9 @@ BASE_REPO_SOURCE=""
 REPO_DEFAULT=""
 if [ -n "$REPO_ARG" ] && [ "$NO_NETWORK" = 1 ]; then
   warn "--repo is ignored with --no-network: the base repository is not resolved"
+fi
+if [ "$PR_GIVEN" = 1 ] && [ "$NO_NETWORK" = 1 ]; then
+  warn "--pr is ignored with --no-network: no PR lookup was made"
 fi
 if [ "$PR_LOOKUP" = found ]; then
   BASE_REPO=$(jq -r .url "$TMP/pr.json" | sed -nE 's#^https?://[^/]+/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
@@ -496,7 +532,11 @@ else
 fi
 grep -Fxv -- "$TEMPLATE_PATH" "$TMP/templates.list" | lines_json > "$TMP/other-templates.json" || echo '[]' > "$TMP/other-templates.json"
 lines_json < "$TMP/warnings" > "$TMP/warnings.json"
-if [ -s "$TMP/open-list.ndjson" ]; then jq -sc . "$TMP/open-list.ndjson" > "$TMP/open-prs.json"; else echo '[]' > "$TMP/open-prs.json"; fi
+if [ -s "$TMP/open-sel.json" ]; then
+  jq -c '[.[] | {number, url, repo: (.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")), baseRefName}]' "$TMP/open-sel.json" > "$TMP/open-prs.json"
+else
+  echo '[]' > "$TMP/open-prs.json"
+fi
 
 jq -n \
   --arg branch "$BRANCH" \
