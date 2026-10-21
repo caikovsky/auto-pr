@@ -66,10 +66,14 @@ case "$1 $2" in
   "repo view")
     target="${3:-}"
     case "$target" in -* | "") target="$resolved" ;; esac
-    if [ "$target" != "$self" ]; then # another repository: only its default branch is known
-      if [ -n "${FAKE_GH_PARENT_JSON:-}" ]; then printf '%s' "$FAKE_GH_PARENT_JSON"; exit 0; fi
-      echo "error connecting to api.github.com" >&2
-      exit 1
+    if [ "$target" != "$self" ]; then # another repository: its canonical name and default branch
+      for missing in ${FAKE_GH_MISSING:-}; do
+        if [ "$missing" = "${3:-}" ]; then echo "GraphQL: Could not resolve to a Repository with the name '$missing'. (repository)" >&2; exit 1; fi
+      done
+      base_json="${FAKE_GH_PARENT_JSON:-{\}}"
+      if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$target" = "$FAKE_GH_REDIRECT_FROM" ]; then target="$FAKE_GH_REDIRECT_TO"; fi
+      jq -c --arg n "$target" '. + {nameWithOwner: $n}' <<< "$base_json"
+      exit 0
     fi
     if [ -n "${FAKE_GH_REPO_JSON:-}" ]; then printf '%s' "$FAKE_GH_REPO_JSON"; exit 0; fi
     if [ -n "${FAKE_GH_DEFAULT:-}" ]; then
@@ -127,7 +131,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -847,6 +851,33 @@ check "--pr 42 --repo parent: the other PR is still listed" '.open_prs | map(.nu
 run_gather --pr 42 --repo acme/lib --base release
 check "--pr 42 with --base release: the base is the argument" '.base_source' argument
 unset FAKE_GH_PRS
+
+# --- --repo: the warning names only the PRs left out; a renamed repository is canonicalized ---
+new_fork
+sha=$(git rev-parse HEAD)
+fork_pr=$(pr_json 7 false main OPEN "$sha" me/lib me)
+parent_pr=$(pr_json 42 false main OPEN "$sha" acme/lib me)
+export FAKE_GH_PRS="[$fork_pr,$parent_pr]"
+run_gather --repo acme/lib
+check "--repo parent: warning names the fork PR" '.warnings | map(select(contains("not selected") and contains("#7 "))) | length' 1
+check "--repo parent: warning does not name the selected PR" '.warnings | map(select(contains("not selected") and contains("#42"))) | length' 0
+run_gather --repo me/lib
+check "--repo fork: warning names the parent PR" '.warnings | map(select(contains("not selected") and contains("#42"))) | length' 1
+check "--repo fork: warning does not name the selected PR" '.warnings | map(select(contains("not selected") and contains("#7 "))) | length' 0
+export FAKE_GH_REDIRECT_FROM=oldacme/lib FAKE_GH_REDIRECT_TO=acme/lib
+run_gather --repo oldacme/lib
+check "--repo with a renamed repository's old name: found" '.pr_lookup' found
+check "--repo old name: the PR in the new name" '.pr.number' 42
+check "--repo old name: base repo is the canonical name" '.base_repo' acme/lib
+check "--repo old name: the open PR fixes the base repo" '.base_repo_source' pull-request
+check "--repo old name: the rename is warned about" '.warnings | map(select(contains("is now named acme/lib"))) | length' 1
+run_gather --pr 42 --repo oldacme/lib
+check "--pr with --repo old name: found" '.pr.number' 42
+check "--pr with --repo old name: base repo" '.base_repo' acme/lib
+unset FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO
+export FAKE_GH_MISSING="nope/missing"
+expect_fail "--repo that does not exist exits 2" "could not find" --repo nope/missing
+unset FAKE_GH_MISSING FAKE_GH_PRS
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
 new_fork
