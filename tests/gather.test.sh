@@ -774,7 +774,8 @@ check "two open PRs: url listed" '.open_prs | map(.url | startswith("https://git
 run_gather --repo acme/lib
 check "--repo parent narrows to the parent PR" '.pr_lookup' found
 check "--repo parent: number" '.pr.number' 42
-check "--repo parent: only one is listed" '.open_prs | length' 1
+check "--repo parent: the full list is still reported" '.open_prs | length' 2
+check "--repo parent: the PR left out is warned about" '.warnings | map(select(contains("not selected"))) | length' 1
 run_gather --repo me/lib
 check "--repo fork narrows to the fork PR" '.pr.number' 7
 parent_merged=$(pr_json 42 false main MERGED "$sha" acme/lib me)
@@ -782,7 +783,7 @@ export FAKE_GH_PRS="[$fork_pr,$parent_merged]"
 run_gather
 check "one open and one merged PR: found" '.pr_lookup' found
 check "one open and one merged PR: the open one" '.pr.number' 7
-check "one open and one merged PR: only the open one is listed" '.open_prs | length' 1
+check "one open and one merged PR: only open PRs are listed" '.open_prs | length' 1
 check "one open and one merged PR: merged one warned" '.warnings | map(select(contains("MERGED"))) | length' 1
 export FAKE_GH_PRS='[]'
 run_gather
@@ -804,17 +805,20 @@ run_gather
 check "same repo, two bases: ambiguous" '.pr_lookup' ambiguous
 check "same repo, two bases: both listed with their base" '.open_prs | map("\(.number):\(.baseRefName)") | sort | join(",")' "7:main,8:release"
 run_gather --base release
-check "--base narrows an ambiguous lookup: found" '.pr_lookup' found
-check "--base release: the release PR" '.pr.number' 8
-check "--base release: only that PR is listed" '.open_prs | length' 1
+check "--base never selects a PR: still ambiguous" '.pr_lookup' ambiguous
+check "--base release: no PR is chosen" '.pr' null
+check "--base release: both PRs are listed" '.open_prs | length' 2
 run_gather --base main
-check "--base main: the main PR" '.pr.number' 7
+check "--base main: still ambiguous" '.pr_lookup' ambiguous
 run_gather --pr 7
 check "--pr 7: found" '.pr_lookup' found
 check "--pr 7: the PR" '.pr.number' 7
+check "--pr 7: the full list is still reported" '.open_prs | length' 2
 check "--pr 7: base repo from the PR" '.base_repo_source' pull-request
+run_gather --pr 8 --base release
+check "--pr 8 with --base release: found" '.pr.number' 8
 run_gather --pr 8 --base main
-check "--pr beats --base" '.pr.number' 8
+check "--pr beats --base: the PR is chosen by number" '.pr.number' 8
 expect_fail "--pr of a PR that is not open from this branch exits 2" "not an open PR from this branch" --pr 99
 for bad in 0 -1 abc 1.5 ''; do
   expect_fail "--pr '$bad' is rejected" "positive integer" --pr "$bad"
@@ -824,6 +828,24 @@ run_gather --base release
 check "--base alone does not hide a single PR (the PR base can change)" '.pr.number' 7
 run_gather --pr 7 --no-network
 check "--pr is ignored with --no-network" '.warnings | map(select(contains("--pr"))) | length' 1
+unset FAKE_GH_PRS
+
+# --- fork PR #7 (base main) and parent PR #42 (base release): --base must not pick one -------
+new_fork
+(cd "$DIR/seed" && git push -q origin main:release)
+sha=$(git rev-parse HEAD)
+fork_pr=$(pr_json 7 false main OPEN "$sha" me/lib me)
+parent_pr=$(pr_json 42 false release OPEN "$sha" acme/lib me)
+export FAKE_GH_PRS="[$fork_pr,$parent_pr]"
+run_gather --base release
+check "fork #7@main + parent #42@release, --base release: ambiguous" '.pr_lookup' ambiguous
+check "--base release does not hide the fork PR" '.open_prs | map(.number) | sort | join(",")' "7,42"
+check "--base release selects nothing" '.pr' null
+run_gather --pr 42 --repo acme/lib
+check "--pr 42 --repo parent: found" '.pr.number' 42
+check "--pr 42 --repo parent: the other PR is still listed" '.open_prs | map(.number) | sort | join(",")' "7,42"
+run_gather --pr 42 --repo acme/lib --base release
+check "--pr 42 with --base release: the base is the argument" '.base_source' argument
 unset FAKE_GH_PRS
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
