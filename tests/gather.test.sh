@@ -38,6 +38,11 @@ case "$1 $2" in
     echo 'no pull requests found for branch "x"' >&2
     exit 1
     ;;
+  "repo set-default")
+    if [ -n "${FAKE_GH_SET_DEFAULT:-}" ]; then echo "$FAKE_GH_SET_DEFAULT"; exit 0; fi
+    echo "X No default remote repository has been set. To learn more about the default repository, run: gh repo set-default --help"
+    exit 0
+    ;;
   "repo view")
     if [ -n "${3:-}" ] && [ "${3#-}" = "$3" ]; then # gh repo view <repo> --json defaultBranchRef
       if [ -n "${FAKE_GH_PARENT_JSON:-}" ]; then printf '%s' "$FAKE_GH_PARENT_JSON"; exit 0; fi
@@ -101,7 +106,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON
+  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -583,6 +588,22 @@ check_no "head sync: diverged is not in sync" '.head_in_sync'
 git push -q origin --delete feature/sync
 run_gather --base main
 check "head sync: deleted remote head" '.head_status' remote-missing
+# A git whose messages are not English must not change the answer: this wrapper translates the
+# one sentence an English-text check would look for.
+GERMAN_BIN="$WORK/german-bin"
+mkdir -p "$GERMAN_BIN"
+cat > "$GERMAN_BIN/git" << GERMAN_EOF
+#!/usr/bin/env bash
+err=\$(mktemp "\${TMPDIR:-/tmp}/german-git.XXXXXX")
+"$(command -v git)" "\$@" 2> "\$err"
+rc=\$?
+sed -e "s/couldn't find remote ref/Remote-Referenz konnte nicht gefunden werden:/" "\$err" >&2
+rm -f "\$err"
+exit \$rc
+GERMAN_EOF
+chmod +x "$GERMAN_BIN/git"
+(PATH="$GERMAN_BIN:$PATH"; run_gather --base main)
+check "head sync: deleted remote head under a non-English git" '.head_status' remote-missing
 check "head sync: deleted remote head has no sha" '.remote_head' null
 check_no "head sync: deleted is not in sync" '.head_in_sync'
 
@@ -638,6 +659,7 @@ check "fork: files" '.files | join(",")' own.txt
 check "fork: diff omits upstream files" '.diff | contains("u1.txt") or contains("u2.txt")' false
 check "fork: no warnings" '.warnings | length' 0
 check "fork: head in sync" '.head_in_sync' true
+check "fork without a PR or default: parent needs confirmation" '.base_repo_source' fork-parent
 
 git remote remove upstream
 run_gather
@@ -652,6 +674,7 @@ export FAKE_GH_PR_JSON
 unset FAKE_GH_REPO_JSON
 run_gather
 check "fork: base repo read from the PR URL" '.base_repo' acme/lib
+check "fork: PR URL source" '.base_repo_source' pull-request
 check "fork: PR base diff is right" '.commit_count' 1
 unset FAKE_GH_PR_JSON
 
@@ -667,7 +690,34 @@ export FAKE_GH_DEFAULT=main
 run_gather
 check "no fork: base repo equals head repo" '.base_repo == .head_repo' true
 check "no fork: base remote is origin" '.base_remote' origin
+check "no fork: base repo source is origin" '.base_repo_source' origin
 unset FAKE_GH_DEFAULT
+
+# --- which repository a fork PR targets: PR, --repo, gh default, then the parent (confirm) ----
+new_fork
+run_gather --repo acme/lib
+check "--repo: source is the argument" '.base_repo_source' argument
+check "--repo: base repo" '.base_repo' acme/lib
+check "--repo: only own commits" '.commit_count' 1
+run_gather --repo me/lib
+check "--repo of the fork itself: base repo" '.base_repo' me/lib
+check "--repo of the fork itself: base remote is origin" '.base_remote' origin
+check "--repo of the fork itself: source" '.base_repo_source' argument
+export FAKE_GH_SET_DEFAULT=acme/lib
+run_gather
+check "gh default repo is honored" '.base_repo' acme/lib
+check "gh default repo: source" '.base_repo_source' gh-default
+check "gh default repo: only own commits" '.commit_count' 1
+export FAKE_GH_SET_DEFAULT=me/lib
+run_gather
+check "gh default repo can be the fork" '.base_repo_source' gh-default
+check "gh default fork: base repo" '.base_repo' me/lib
+unset FAKE_GH_SET_DEFAULT
+run_gather --repo acme/lib --no-network
+check "--no-network ignores --repo: base repo unknown" '.base_repo' null
+check "--no-network ignores --repo: warned" '.warnings | map(select(contains("--repo"))) | length' 1
+expect_fail "--repo with a bad shape is rejected" "owner/name" --repo 'acme/lib;x'
+expect_fail "--repo needs a value" "--repo needs" --repo
 
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0

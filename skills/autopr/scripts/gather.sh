@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Collect the git and GitHub context for one PR and print it as a single JSON object.
 #
-# Usage: gather.sh [--base <branch>] [--no-network] [--max-diff-lines <n>]
+# Usage: gather.sh [--base <branch>] [--repo <owner/name>] [--no-network] [--max-diff-lines <n>]
 #   --base <branch>        base branch; overrides the existing PR and the repo default
+#   --repo <owner/name>    repository the PR targets (a fork PR targets the parent); ignored when an
+#                          open PR already fixes it, and with --no-network
 #   --no-network           skip git fetch and every gh call (also AUTOPR_NO_NETWORK=1)
 #   --max-diff-lines <n>   cut the diff after n lines (default 1200, also AUTOPR_MAX_DIFF_LINES)
 #
@@ -14,6 +16,7 @@
 set -euo pipefail
 
 BASE_ARG=""
+REPO_ARG=""
 NO_NETWORK="${AUTOPR_NO_NETWORK:-0}"
 MAX_DIFF_LINES="${AUTOPR_MAX_DIFF_LINES:-1200}"
 MAX_DIFF_BYTES=200000
@@ -24,11 +27,24 @@ die() {
   exit 2
 }
 
+# True for owner/name made of letters, digits, . _ - (also what keeps it safe in a command).
+valid_repo() {
+  case "$1" in
+    */*/* | */ | /* | '') return 1 ;;
+  esac
+  [ -z "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9._/-')" ]
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --base)
       [ $# -ge 2 ] || die "--base needs a branch name"
       BASE_ARG="$2"
+      shift 2
+      ;;
+    --repo)
+      [ $# -ge 2 ] || die "--repo needs an owner/name value"
+      REPO_ARG="$2"
       shift 2
       ;;
     --no-network)
@@ -44,6 +60,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ -n "$REPO_ARG" ] && ! valid_repo "$REPO_ARG"; then
+  die "--repo must look like owner/name (letters, digits, . _ -)"
+fi
 case "$MAX_DIFF_LINES" in
   '' | *[!0-9]*) die "--max-diff-lines must be a positive integer" ;;
 esac
@@ -149,39 +168,63 @@ if [ "$HAVE_GH" = 1 ]; then
   fi
 fi
 
-# Base repository: the repo the PR targets. For an open PR it is in the PR URL; otherwise it is
-# gh's view of this repo, or its parent when origin is a fork. Unknown (null) without gh.
-valid_repo() {
-  case "$1" in
-    */*/* | */ | /* | '') return 1 ;;
-  esac
-  [ -z "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9._/-')" ]
-}
+# Base repository: the repo the PR targets, with where that answer came from
+# (base_repo_source): pull-request (the URL of the open PR), argument (--repo), gh-default
+# (gh repo set-default), fork-parent (origin is a fork: its parent, a guess the skill must confirm
+# when no PR exists), origin (origin itself). Unknown (null) without gh.
 BASE_REPO=""
+BASE_REPO_SOURCE=""
 REPO_DEFAULT=""
 REPO_VIEW_FAILED=""
+if [ -n "$REPO_ARG" ] && [ "$NO_NETWORK" = 1 ]; then
+  warn "--repo is ignored with --no-network: the base repository is not resolved"
+fi
 if [ "$PR_LOOKUP" = found ]; then
   BASE_REPO=$(jq -r .url "$TMP/pr.json" | sed -nE 's#^https?://[^/]+/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+  BASE_REPO_SOURCE="pull-request"
+  if [ -n "$REPO_ARG" ] && [ "$(lower "$REPO_ARG")" != "$(lower "$BASE_REPO")" ]; then
+    warn "--repo $REPO_ARG ignored: the open PR targets $BASE_REPO"
+  fi
 elif [ "$HAVE_GH" = 1 ]; then
+  VIEW_REPO=""
+  VIEW_PARENT=""
+  VIEW_DEFAULT=""
   if GH_PROMPT_DISABLED=1 gh repo view --json nameWithOwner,parent,defaultBranchRef \
     > "$TMP/repo.json" 2> "$TMP/repo.err"; then
-    PARENT=$(jq -r 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end' "$TMP/repo.json")
-    if [ -n "$PARENT" ] && valid_repo "$PARENT"; then
-      BASE_REPO="$PARENT"
-      if GH_PROMPT_DISABLED=1 gh repo view "$PARENT" --json defaultBranchRef > "$TMP/parent.json" 2> /dev/null; then
-        REPO_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/parent.json")
-      fi
-    else
-      BASE_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
-      REPO_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/repo.json")
-    fi
+    VIEW_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
+    VIEW_PARENT=$(jq -r 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end' "$TMP/repo.json")
+    VIEW_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/repo.json")
   else
     REPO_VIEW_FAILED=$(head -n 1 "$TMP/repo.err")
+  fi
+  GH_DEFAULT=$(GH_PROMPT_DISABLED=1 gh repo set-default --view 2> /dev/null || true)
+  GH_DEFAULT=${GH_DEFAULT%%$'\n'*}
+  if [ -n "$REPO_ARG" ]; then
+    BASE_REPO="$REPO_ARG"
+    BASE_REPO_SOURCE="argument"
+  elif valid_repo "$GH_DEFAULT"; then
+    BASE_REPO="$GH_DEFAULT"
+    BASE_REPO_SOURCE="gh-default"
+  elif [ -n "$VIEW_PARENT" ] && valid_repo "$VIEW_PARENT"; then
+    BASE_REPO="$VIEW_PARENT"
+    BASE_REPO_SOURCE="fork-parent"
+  elif [ -n "$VIEW_REPO" ]; then
+    BASE_REPO="$VIEW_REPO"
+    BASE_REPO_SOURCE="origin"
+  fi
+  # The default branch of the chosen repository, only needed when nothing else names the base.
+  if [ -z "$BASE_ARG" ] && [ -n "$BASE_REPO" ] && valid_repo "$BASE_REPO"; then
+    if [ "$(lower "$BASE_REPO")" = "$(lower "$VIEW_REPO")" ]; then
+      REPO_DEFAULT="$VIEW_DEFAULT"
+    elif GH_PROMPT_DISABLED=1 gh repo view "$BASE_REPO" --json defaultBranchRef > "$TMP/parent.json" 2> /dev/null; then
+      REPO_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/parent.json")
+    fi
   fi
 fi
 if [ -n "$BASE_REPO" ] && ! valid_repo "$BASE_REPO"; then
   warn "ignoring base repository '$BASE_REPO': not an owner/repo name"
   BASE_REPO=""
+  BASE_REPO_SOURCE=""
 fi
 
 # Base branch: --base > existing PR > repo default (gh) > origin/HEAD > main/master/develop.
@@ -313,7 +356,15 @@ HEAD_SHA=$(git rev-parse HEAD)
 REMOTE_HEAD=""
 HEAD_STATUS="skipped"
 if [ "$NO_NETWORK" != 1 ]; then
-  if git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2> "$TMP/fetch-head.err"; then
+  # ls-remote tells whether the branch exists without parsing git's (translated) messages.
+  if git ls-remote --heads origin "refs/heads/$BRANCH" > "$TMP/ls-remote.txt" 2> "$TMP/ls-remote.err"; then
+    BRANCH_ON_REMOTE=$(awk -F'\t' -v ref="refs/heads/$BRANCH" '$2 == ref { found = 1 } END { print found + 0 }' "$TMP/ls-remote.txt")
+  else
+    die "git ls-remote origin failed: $(head -n 1 "$TMP/ls-remote.err"). Run this outside the sandbox and check the network and the remote."
+  fi
+  if [ "$BRANCH_ON_REMOTE" = 0 ]; then
+    HEAD_STATUS="remote-missing"
+  elif git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2> "$TMP/fetch-head.err"; then
     REMOTE_HEAD=$(git rev-parse "refs/remotes/origin/$BRANCH")
     PR_HEAD=$(jq -r '.headRefOid // empty' "$TMP/pr.json")
     if [ "$REMOTE_HEAD" = "$HEAD_SHA" ]; then
@@ -329,8 +380,6 @@ if [ "$NO_NETWORK" != 1 ]; then
     else
       HEAD_STATUS="diverged"
     fi
-  elif grep -qi "couldn't find remote ref" "$TMP/fetch-head.err"; then
-    HEAD_STATUS="remote-missing"
   else
     die "git fetch origin $BRANCH failed: $(head -n 1 "$TMP/fetch-head.err"). Run this outside the sandbox and check the network and the remote."
   fi
@@ -413,6 +462,7 @@ jq -n \
   --slurpfile pr "$TMP/pr.json" \
   --arg pr_lookup "$PR_LOOKUP" \
   --arg base_repo "$BASE_REPO" \
+  --arg base_repo_source "$BASE_REPO_SOURCE" \
   --arg head_repo "$HEAD_REPO" \
   --arg base_remote "$BASE_REMOTE" \
   --arg head_status "$HEAD_STATUS" \
@@ -424,6 +474,7 @@ jq -n \
     base: $base,
     base_source: $base_source,
     base_repo: (if $base_repo == "" then null else $base_repo end),
+    base_repo_source: (if $base_repo_source == "" then null else $base_repo_source end),
     head_repo: (if $head_repo == "" then null else $head_repo end),
     base_remote: (if $base_remote == "" then null else $base_remote end),
     linked_issues: $linked[0],
