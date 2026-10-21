@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoPR"
+  short_description: "Create or update a GitHub pull request with a generated description"
+  default_prompt: "Use $autopr to open or update the pull request for this branch."

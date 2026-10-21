@@ -1,0 +1,12 @@
+{
+  "name": "autopr",
+  "version": "1.5.0",
+  "description": "Creates and updates GitHub pull requests: gathers git context, fetches the Jira ticket named in the branch via acli, finds the PR template, writes the description, and runs gh.",
+  "author": {
+    "name": "Caique Maurano",
+    "url": "https://github.com/caikovsky"
+  },
+  "homepage": "https://github.com/caikovsky/auto-pr",
+  "repository": "https://github.com/caikovsky/auto-pr",
+  "license": "MIT"
+}

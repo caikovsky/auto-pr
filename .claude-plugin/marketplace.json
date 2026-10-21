@@ -1,0 +1,15 @@
+{
+  "name": "auto-pr",
+  "description": "Marketplace for the autopr skill.",
+  "owner": {
+    "name": "Caique Maurano",
+    "url": "https://github.com/caikovsky"
+  },
+  "plugins": [
+    {
+      "name": "autopr",
+      "source": "./",
+      "description": "Creates and updates GitHub pull requests: gathers git context, fetches the Jira ticket named in the branch via acli, finds the PR template, writes the description, and runs gh."
+    }
+  ]
+}

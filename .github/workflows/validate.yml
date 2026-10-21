@@ -1,0 +1,51 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: shellcheck
+        run: shellcheck skills/autopr/scripts/*.sh tests/*.sh
+
+      - name: Script tests
+        run: |
+          bash tests/gather.test.sh
+          bash tests/title-file.test.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: false
+
+      - name: Claude Code plugin manifest
+        run: npx --yes @anthropic-ai/claude-code@2.1.304 plugin validate --strict .
+
+      - name: skills CLI discovery
+        run: npx --yes skills@1.7.4 add . --list
+
+      - name: Agent Skills spec
+        run: uvx --from skills-ref==0.1.1 agentskills validate skills/autopr
+
+  macos-bash-3:
+    # macOS ships bash 3.2; the script must run there.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Script tests under /bin/bash
+        run: |
+          /bin/bash tests/gather.test.sh
+          /bin/bash tests/title-file.test.sh
