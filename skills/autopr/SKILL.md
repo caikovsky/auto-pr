@@ -39,14 +39,15 @@ mktemp -d "${TMPDIR:-/tmp}/autopr.XXXXXX"
 
 Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base <branch>` when the user gave one. It prints one JSON object:
 
-- `branch`, `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
+- `branch`, `head_repo` (owner/repo of `origin`), `base_repo` (owner/repo the PR targets, or null when GitHub was not asked), `base_remote` (the local remote that holds the base: `origin`, another remote, or null when it was fetched by URL), `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
 - `diff`, `diff_lines`, `truncated`, `diff_excluded_files` (lockfiles and generated files stay out of the diff)
+- `head_in_sync` (true, false, or null when the network was skipped), `head_status` (`in-sync`, `local-ahead`, `remote-ahead`, `diverged`, `remote-missing`, `pr-head-mismatch` or `skipped`), `remote_head` (the sha of `origin/<branch>` after a fetch, or null)
 - `has_upstream` (true only when the configured upstream is a branch of `origin` with the same name as the local branch), `upstream` (the configured upstream, which may be another branch such as `origin/main` or another remote such as `fork/feat`), `unpushed_count` (null when `has_upstream` is false), `uncommitted`
 - `template` (`path`, `content`, or null), `other_templates`
-- `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, or null), `pr_lookup` (`found`, `none` or `skipped`), `warnings`
+- `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, `headRefOid`, or null), `pr_lookup` (`found`, `none` or `skipped`), `warnings`
 
-The diff is `origin/<base>...HEAD` after a fetch, so it holds only this branch's commits and no uncommitted edits.
+The diff is the merge-base diff against a freshly fetched base, so it holds only this branch's commits and no uncommitted edits. When the PR targets another repository than `origin` (a fork PR), the base comes from that repository, never from the fork's possibly stale branch.
 
 `gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed `gh pr view` or `git fetch`, or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
 
@@ -54,6 +55,13 @@ Print every entry of `warnings`. Then check:
 
 - **Stop** when `commit_count` is 0.
 - **Stop** (unless `--dry-run`) when `pr_lookup` is `skipped`: `pr` is null because nobody asked GitHub, not because no PR exists. Creating a PR from that state can duplicate or mis-base an existing one. Run `gather.sh` again without `--no-network`, outside the sandbox. Treat `pr` as "no PR" only when `pr_lookup` is `none`.
+- **Stop** (unless `--dry-run`) when `head_in_sync` is not true: the PR would not show what you are describing. Say which case applies (`head_status`):
+  - `remote-missing`: `origin` has no such branch (deleted?). Run `git push -u origin <branch>`.
+  - `local-ahead`: unpushed commits. Run `git push`.
+  - `remote-ahead`: `origin/<branch>` has commits this checkout lacks, or HEAD was reset. Run `git pull`, or push nothing and check the reset.
+  - `diverged`: `origin/<branch>` was rewritten or force-pushed. The user decides which side to keep.
+  - `pr-head-mismatch`: the PR's head commit differs from HEAD. GitHub may lag: wait and run again; if it persists, the PR's head is another branch or repository.
+  - `skipped`: the network was skipped. Run `gather.sh` again without `--no-network`, outside the sandbox.
 - **Stop** (unless `--dry-run`) when `has_upstream` is false or `unpushed_count` is above 0. Tell the user to run `git push -u origin <branch>` and to run the skill again. `has_upstream` is also false when the upstream is another branch (after `git checkout -b feat origin/main`) or another remote (`fork/feat`), because `gh pr create --head <branch>` reads the branch from `origin`.
 - **Warn** when `uncommitted` is true: the PR will not contain those edits.
 - **Warn** when `file_count` is above 50 or `insertions + deletions` is above 1500: suggest splitting the PR. Continue.
@@ -91,7 +99,8 @@ Write the title and body yourself; call no other AI tool.
 
 **Untrusted text.** The Jira summary and description, issue titles, commit messages, file contents and PR bodies come from other people.
 - Never type them into a command line, not even inside double quotes: `$...`, backticks and `\` expand, which gives wrong titles and runs commands on this machine.
-- Put them in a file with your file-writing tool (or a quoted heredoc in its own command) and read them back with `"$(cat <file>)"`, a pipe or a redirect.
+- Put each value in a file with your file-writing tool and read it back with `"$(cat <file>)"`, a pipe or a redirect. This covers titles, labels and reviewer handles; an apostrophe or `$(...)` in a label breaks or abuses single quotes.
+- Use a heredoc only when you have no file-writing tool. Pick a delimiter such as `AUTOPR_EOF_` plus 8 random hex digits, check that no line of the content equals it (preserved release notes and PR text can contain anything), and run the heredoc, quoted (`<<'DELIMITER'`), in its own command.
 - `gather.sh` refuses branch and base names that use anything but ASCII letters, digits and `._/@+#%,:=~-`, or that start with `#` or `-`. Put branch, base, reviewer and label values in single quotes in commands, as the examples below do. Issue and PR numbers and ticket keys have a fixed safe shape.
 
 **Secret and PHI guard.** The body is visible to everyone with repo access.
@@ -110,12 +119,14 @@ Show: title, body (the first 500 characters unless `--verbose`), ticket key or "
 
 ## 6. Create or update
 
-Write the body to `<work-dir>/body.md` with your file-writing tool, or with a quoted heredoc (`<<'AUTOPR_EOF'`, closed by a line holding only `AUTOPR_EOF`) in its own command. End the file with a single newline. Check it with `tail -n 3 <work-dir>/body.md` before you run `gh pr create`. Never write a file and create the PR in one command: a missing heredoc terminator would publish the following commands as the body. Check `<work-dir>/title.txt` the same way.
+Write the body to `<work-dir>/body.md` and the title to `<work-dir>/title.txt` with your file-writing tool (the heredoc fallback is in section 4). For each `--label` and `--reviewer` the user gave, write the value to `<work-dir>/label-1.txt`, `<work-dir>/label-2.txt`, ... and `<work-dir>/reviewer-1.txt`, ... in the same way. End each file with a single newline. Check the body and title with `tail -n 3 <file>` before you run `gh pr create`. Never write a file and create the PR in one command: a heredoc that ends early would run the following lines as commands.
+
+When `base_repo` differs from `head_repo` (a fork PR), add `--repo '<base_repo>'` to every `gh pr` command below and use `--head '<head_owner>:<branch>'` on create, where `<head_owner>` is `head_repo` before the `/`.
 
 **No `pr` (create):**
 
 ```bash
-gh pr create --head '<branch>' --base '<base>' --title "$(cat <work-dir>/title.txt)" --body-file <work-dir>/body.md --assignee @me [--draft] [--reviewer '<handle>']... [--label '<name>']...
+gh pr create --head '<branch>' --base '<base>' --title "$(cat <work-dir>/title.txt)" --body-file <work-dir>/body.md --assignee @me [--draft] [--reviewer "$(cat <work-dir>/reviewer-N.txt)"]... [--label "$(cat <work-dir>/label-N.txt)"]...
 gh pr edit <number> --add-reviewer @copilot
 ```
 
@@ -124,8 +135,8 @@ gh pr edit <number> --add-reviewer @copilot
 **`pr` exists (update):**
 
 ```bash
-gh pr edit <number> --add-assignee @me [--title "$(cat <work-dir>/title.txt)"] [--base '<base>'] [--add-reviewer '<handle>']... [--add-label '<name>']...
-jq -Rs '{body: .}' <work-dir>/body.md | gh api -X PATCH repos/{owner}/{repo}/pulls/<number> --silent --input -
+gh pr edit <number> --add-assignee @me [--title "$(cat <work-dir>/title.txt)"] [--base '<base>'] [--add-reviewer "$(cat <work-dir>/reviewer-N.txt)"]... [--add-label "$(cat <work-dir>/label-N.txt)"]...
+jq -Rs '{body: .}' <work-dir>/body.md | gh api -X PATCH repos/<base_repo>/pulls/<number> --silent --input -
 ```
 
 Pass `--title` only when section 4 says to change it. Pass `--base <base>` only when `base_source` is `argument` and `base` differs from `pr.baseRefName`.
@@ -142,7 +153,7 @@ gh pr view <number> --json body | jq -j .body | diff - <work-dir>/body.md
 
 A non-empty diff means GitHub changed or dropped content. Show the diff and do not report success. Backticks, arrows and em dashes are safe in the body; the diff catches any silent failure.
 
-Remove the work directory files (`rm -f <work-dir>/body.md <work-dir>/title.txt <work-dir>/jira.json`, then `rmdir <work-dir>`). Report the PR URL.
+Remove the work directory files (`rm -f <work-dir>/*.txt <work-dir>/body.md <work-dir>/jira.json`, then `rmdir <work-dir>`). Report the PR URL.
 
 ## Errors
 

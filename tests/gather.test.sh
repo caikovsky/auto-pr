@@ -20,6 +20,17 @@ mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/gh" << 'FAKE_EOF'
 #!/usr/bin/env bash
 echo "$*" >> "${FAKE_GH_LOG:-/dev/null}"
+# Like gh: --jq <expr> filters the JSON output.
+jq_expr=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = --jq ]; then jq_expr="$arg"; fi
+  prev="$arg"
+done
+if [ -n "$jq_expr" ] && [ -z "${FAKE_GH_FILTERED:-}" ]; then
+  FAKE_GH_FILTERED=1 "$0" "$@" | jq -r "$jq_expr"
+  exit "${PIPESTATUS[0]}"
+fi
 case "$1 $2" in
   "pr view")
     if [ -n "${FAKE_GH_PR_JSON:-}" ]; then printf '%s' "$FAKE_GH_PR_JSON"; exit 0; fi
@@ -28,7 +39,17 @@ case "$1 $2" in
     exit 1
     ;;
   "repo view")
-    if [ -n "${FAKE_GH_DEFAULT:-}" ]; then echo "$FAKE_GH_DEFAULT"; exit 0; fi
+    if [ -n "${3:-}" ] && [ "${3#-}" = "$3" ]; then # gh repo view <repo> --json defaultBranchRef
+      if [ -n "${FAKE_GH_PARENT_JSON:-}" ]; then printf '%s' "$FAKE_GH_PARENT_JSON"; exit 0; fi
+      echo "error connecting to api.github.com" >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_GH_REPO_JSON:-}" ]; then printf '%s' "$FAKE_GH_REPO_JSON"; exit 0; fi
+    if [ -n "${FAKE_GH_DEFAULT:-}" ]; then
+      self=$(git remote get-url origin | sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##')
+      printf '{"nameWithOwner":"%s","parent":null,"defaultBranchRef":{"name":"%s"}}' "$self" "$FAKE_GH_DEFAULT"
+      exit 0
+    fi
     echo "error connecting to api.github.com" >&2
     exit 1
     ;;
@@ -80,7 +101,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT
+  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -90,6 +111,17 @@ feature() {
   git add feature.txt
   git commit -q -m "add feature"
   git push -q -u origin "$1"
+}
+
+# origin_repo: owner/repo of the origin remote, as gather.sh derives it from the URL.
+origin_repo() {
+  git remote get-url origin | sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##'
+}
+
+# pr_json <number> <draft> <base> <state> <head oid> [repo]: JSON the fake gh prints for `pr view`.
+pr_json() {
+  printf '{"number":%s,"url":"https://github.com/%s/pull/%s","title":"T","body":"B","isDraft":%s,"baseRefName":"%s","state":"%s","headRefOid":"%s"}' \
+    "$1" "${6:-$(origin_repo)}" "$1" "$2" "$3" "$4" "$5"
 }
 
 # run_gather [args]: run gather.sh in the current repo; stdout to $OUT, stderr to $ERR.
@@ -285,7 +317,8 @@ run_gather
 check "base: gh default branch" '.base' develop
 check "base: gh default source" '.base_source' gh-default-branch
 
-export FAKE_GH_PR_JSON='{"number":9,"url":"https://github.com/o/r/pull/9","title":"T","body":"B","isDraft":true,"baseRefName":"main","state":"OPEN"}'
+FAKE_GH_PR_JSON=$(pr_json 9 true main OPEN "$(git rev-parse HEAD)")
+export FAKE_GH_PR_JSON
 run_gather
 check "base: existing PR beats gh default" '.base' main
 check "base: existing PR source" '.base_source' pull-request
@@ -500,6 +533,141 @@ git commit -q -m "accent"
 git push -q -u origin "feature/café"
 expect_fail "non-ASCII name rejected" "ASCII letters, digits and ._/@+#%,:=~-" --base main
 if grep -qF "characters a shell would expand" "$ERR"; then bad "refusal message: old wording gone" "no old wording" "$(cat "$ERR")"; else ok "refusal message: old wording gone"; fi
+
+# --- head publication guard -----------------------------------------------------------------
+new_repo
+feature feature/sync
+sha=$(git rev-parse HEAD)
+run_gather --base main
+check "head sync: in sync" '.head_in_sync' true
+check "head sync: status" '.head_status' in-sync
+check "head sync: remote head reported" '.remote_head' "$sha"
+run_gather --base main --no-network
+check "head sync: unknown with --no-network" '.head_in_sync' null
+check "head sync: status skipped with --no-network" '.head_status' skipped
+
+echo more > more.txt
+git add more.txt
+git commit -q -m "local only"
+run_gather --base main
+check_no "head sync: local ahead is not in sync" '.head_in_sync'
+check "head sync: local ahead status" '.head_status' local-ahead
+git push -q origin feature/sync
+
+# another clone pushes to the branch: remote ahead of the local HEAD
+other_clone="$DIR/other2"
+git clone -q "$DIR/origin.git" "$other_clone" 2> /dev/null
+(cd "$other_clone" && git checkout -q feature/sync && echo remote > remote.txt && git add remote.txt && git commit -q -m "remote commit" && git push -q origin feature/sync)
+run_gather --base main
+check_no "head sync: remote ahead is not in sync" '.head_in_sync'
+check "head sync: remote ahead status" '.head_status' remote-ahead
+check "head sync: unpushed count stays 0 (the old blind spot)" '.unpushed_count' 0
+
+# local HEAD reset to an ancestor of the remote head
+git fetch -q origin
+git reset -q --hard origin/feature/sync
+git reset -q --hard HEAD~1
+run_gather --base main
+check "head sync: reset to an ancestor is caught" '.head_status' remote-ahead
+check "head sync: reset keeps unpushed_count 0" '.unpushed_count' 0
+
+# remote force-updated: neither side contains the other
+git fetch -q origin
+git reset -q --hard origin/feature/sync
+(cd "$other_clone" && git reset -q --hard HEAD~1 && echo rewritten > rewritten.txt && git add rewritten.txt && git commit -q -m "rewritten" && git push -q --force origin feature/sync)
+run_gather --base main
+check "head sync: force-updated remote" '.head_status' diverged
+check_no "head sync: diverged is not in sync" '.head_in_sync'
+
+# remote branch deleted
+git push -q origin --delete feature/sync
+run_gather --base main
+check "head sync: deleted remote head" '.head_status' remote-missing
+check "head sync: deleted remote head has no sha" '.remote_head' null
+check_no "head sync: deleted is not in sync" '.head_in_sync'
+
+# the PR head must match too
+new_repo
+feature feature/prhead
+sha=$(git rev-parse HEAD)
+FAKE_GH_PR_JSON=$(pr_json 5 false main OPEN "$sha")
+export FAKE_GH_PR_JSON
+run_gather
+check "head sync: PR head matches" '.head_status' in-sync
+FAKE_GH_PR_JSON=$(pr_json 5 false main OPEN 0000000000000000000000000000000000000000)
+export FAKE_GH_PR_JSON
+run_gather
+check "head sync: PR head differs" '.head_status' pr-head-mismatch
+check_no "head sync: PR head mismatch is not in sync" '.head_in_sync'
+unset FAKE_GH_PR_JSON
+
+# --- fork workflow: the base comes from the base repository, not from origin ----------------
+new_fork() {
+  DIR=$(mktemp -d "$WORK/f.XXXXXX")
+  mkdir -p "$DIR/acme" "$DIR/me"
+  git init -q --bare -b main "$DIR/acme/lib.git"
+  git clone -q "$DIR/acme/lib.git" "$DIR/seed" 2> /dev/null
+  (cd "$DIR/seed" && git checkout -q -b main && echo base > README.md && git add README.md && git commit -q -m "initial" && git push -q origin main)
+  git clone -q --bare "$DIR/acme/lib.git" "$DIR/me/lib.git" 2> /dev/null
+  git clone -q "$DIR/me/lib.git" "$DIR/repo" 2> /dev/null
+  # upstream moves ahead; the fork's main stays stale
+  (cd "$DIR/seed" && echo u1 > u1.txt && git add u1.txt && git commit -q -m "upstream one" && echo u2 > u2.txt && git add u2.txt && git commit -q -m "upstream two" && git push -q origin main)
+  cd "$DIR/repo"
+  git remote add upstream "$DIR/acme/lib.git"
+  git fetch -q upstream
+  git checkout -q -b feature/fork upstream/main
+  git branch -q --unset-upstream
+  echo own > own.txt
+  git add own.txt
+  git commit -q -m "own change"
+  git push -q -u origin feature/fork
+  : > "$FAKE_GH_LOG"
+  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT
+  export FAKE_GH_REPO_JSON='{"nameWithOwner":"me/lib","parent":{"name":"lib","owner":{"login":"acme"}},"defaultBranchRef":{"name":"main"}}'
+  export FAKE_GH_PARENT_JSON='{"defaultBranchRef":{"name":"main"}}'
+}
+
+new_fork
+run_gather
+check "fork: base repo is the parent" '.base_repo' acme/lib
+check "fork: head repo is origin" '.head_repo' me/lib
+check "fork: base remote found by URL match" '.base_remote' upstream
+check "fork: default branch comes from the parent" '.base' main
+check "fork: only own commits (fork main is stale)" '.commit_count' 1
+check "fork: files" '.files | join(",")' own.txt
+check "fork: diff omits upstream files" '.diff | contains("u1.txt") or contains("u2.txt")' false
+check "fork: no warnings" '.warnings | length' 0
+check "fork: head in sync" '.head_in_sync' true
+
+git remote remove upstream
+run_gather
+check "fork: no matching remote, fetched by URL" '.commit_count' 1
+check "fork: base remote null without a match" '.base_remote' null
+check "fork: warning names the fetch" '.warnings | map(select(contains("no local remote"))) | length' 1
+
+git remote add upstream "$DIR/acme/lib.git"
+git fetch -q upstream
+FAKE_GH_PR_JSON=$(pr_json 3 false main OPEN "$(git rev-parse HEAD)" acme/lib)
+export FAKE_GH_PR_JSON
+unset FAKE_GH_REPO_JSON
+run_gather
+check "fork: base repo read from the PR URL" '.base_repo' acme/lib
+check "fork: PR base diff is right" '.commit_count' 1
+unset FAKE_GH_PR_JSON
+
+export FAKE_GH_REPO_JSON='{"nameWithOwner":"me/lib","parent":{"name":"lib","owner":{"login":"acme"}},"defaultBranchRef":{"name":"main"}}'
+run_gather --no-network
+check "fork: --no-network keeps the origin base" '.base_remote' origin
+check "fork: --no-network has no base repo" '.base_repo' null
+unset FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON
+
+new_repo
+feature feature/plain
+export FAKE_GH_DEFAULT=main
+run_gather
+check "no fork: base repo equals head repo" '.base_repo == .head_repo' true
+check "no fork: base remote is origin" '.base_remote' origin
+unset FAKE_GH_DEFAULT
 
 # --- option validation ----------------------------------------------------------------------
 expect_fail "max-diff-lines 0 rejected" "positive integer" --max-diff-lines 0
