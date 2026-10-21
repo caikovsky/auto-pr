@@ -53,6 +53,9 @@ case "$1 $2" in
     for failing in ${FAKE_GH_FAIL_REPOS:-}; do
       if [ "$failing" = "$resolved" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
     done
+    for gone in ${FAKE_GH_NOTFOUND_REPOS:-}; do
+      if [ "$gone" = "$resolved" ]; then echo "GraphQL: Could not resolve to a Repository with the name '$gone'. (repository)" >&2; exit 1; fi
+    done
     # Fake PRs (FAKE_GH_PRS, a JSON array, or the single FAKE_GH_PR_JSON) live in the repository
     # named by their URL and are found only there.
     if [ -n "${FAKE_GH_PRS:-}" ]; then prs="$FAKE_GH_PRS"; elif [ -n "${FAKE_GH_PR_JSON:-}" ]; then prs="[$FAKE_GH_PR_JSON]"; else prs="[]"; fi
@@ -152,7 +155,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_FAIL_REPOS FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_NOTFOUND_REPOS FAKE_GH_FAIL_REPOS FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -1017,6 +1020,45 @@ FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head 
 git remote set-url origin "$DIR/missing.git"
 expect_fail "a dead local remote does not mention SSH" "git fetch origin main failed" --base main
 if grep -q "SSH" "$ERR"; then bad "a dead local remote: no SSH hint" "no SSH hint" "$(cat "$ERR")"; else ok "a dead local remote: no SSH hint"; fi
+
+# --- a stale extra remote must not break every run -------------------------------------------
+new_repo
+feature feature/stale
+sha=$(git rev-parse HEAD)
+git remote add stale "$DIR/gone/proj.git"
+export FAKE_GH_NOTFOUND_REPOS="gone/proj"
+run_gather
+check "stale remote, repo not found: the run continues" '.pr_lookup' none
+check "stale remote: one warning names the remote" '.warnings | map(select(contains("remote '"'"'stale'"'"' points at gone/proj"))) | length' 1
+check "stale remote: the warning says how to fix it" '.warnings | map(select(contains("git remote remove stale") and contains("cannot find or you cannot see"))) | length' 1
+FAKE_GH_PRS="[$(pr_json 7 false main OPEN "$sha")]"
+export FAKE_GH_PRS
+run_gather
+check "stale remote with an open PR: found" '.pr.number' 7
+check "stale remote with an open PR: still warned" '.warnings | map(select(contains("remote '"'"'stale'"'"'"))) | length' 1
+run_gather --pr 7
+check "stale remote with --pr: found" '.pr.number' 7
+check "stale remote with --pr: still warned" '.warnings | map(select(contains("remote '"'"'stale'"'"'"))) | length' 1
+FAKE_GH_DEFAULT=main run_gather --repo "$(origin_repo)"
+check "stale remote with --repo: the run continues (--repo does not hide the warning)" '.pr.number' 7
+unset FAKE_GH_NOTFOUND_REPOS
+export FAKE_GH_FAIL_REPOS="gone/proj"
+expect_fail "stale remote, transient error: exit 2" "remote 'stale'"
+expect_fail "stale remote, transient error: says how to fix it" "git remote remove stale"
+unset FAKE_GH_FAIL_REPOS FAKE_GH_PRS
+# origin's own repository, its parent and --repo stay strict, whatever the error
+new_fork
+export FAKE_GH_NOTFOUND_REPOS="acme/lib"
+expect_fail "parent not found: exit 2" "gh pr list for acme/lib failed"
+unset FAKE_GH_NOTFOUND_REPOS
+export FAKE_GH_NOTFOUND_REPOS="me/lib"
+expect_fail "origin repo not found: exit 2" "gh pr list for me/lib failed"
+unset FAKE_GH_NOTFOUND_REPOS
+new_repo
+feature feature/argrepo
+export FAKE_GH_NOTFOUND_REPOS="gone/proj"
+expect_fail "--repo candidate not found: exit 2" "gh pr list for gone/proj failed" --repo gone/proj
+unset FAKE_GH_NOTFOUND_REPOS
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
 new_fork

@@ -10,6 +10,7 @@ Fixes from the second Copilot review of #8, after it merged.
 - A generated PR title has at most 72 characters: a single commit subject or an issue title that is longer is replaced by an imperative summary. A verified Jira title is not capped.
 - The Copilot reviewer request is retried once when the error looks transient (TLS or other timeout, EOF, connection reset, HTTP 5xx), and never on not-found or permission errors. Before, a TLS timeout was reported like a disabled Copilot review.
 - A git fetch or ls-remote that fails over SSH (a broken ssh-agent, a missing key, "Permission denied (publickey)") now says so, and prints the HTTPS rewrite (environment variables for one command, no git config edit) as the way past it. SKILL.md has an error-table row for it.
+- A stale extra remote (it points at a repository GitHub cannot find or you cannot see) no longer stops every run: it is skipped with a warning naming the remote and the fix (`git remote remove <name>` or a corrected URL). Any other failure for such a remote (network, auth, rate limit) still exits 2, and the message names the remote. Failures for origin's repository, its parent and `--repo` stay fatal.
 - The fork base is fetched into a ref private to the run (`refs/autopr/base-<pid>-<n>`), its commit id is pinned for the merge base, log and diff, and the ref is deleted on exit, so parallel runs in one checkout cannot overwrite each other's base.
 
 ## 1.5.0

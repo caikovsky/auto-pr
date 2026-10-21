@@ -207,13 +207,33 @@ VIEW_PARENT=""
 VIEW_DEFAULT=""
 REPO_VIEW_FAILED=""
 CANDIDATES=()
-add_candidate() { # <owner/repo>: append once, case-insensitively, when it is a valid name
+CANDIDATE_REMOTES=() # per candidate: the extra remote it came from, or "" when it is origin's repo, its parent or --repo
+add_candidate() { # <owner/repo> [extra remote name]: append once, case-insensitively, when it is a valid name
   local c
   valid_repo "$1" || return 0
   for c in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
     [ "$(lower "$c")" = "$(lower "$1")" ] && return 0
   done
   CANDIDATES+=("$1")
+  CANDIDATE_REMOTES+=("${2:-}")
+}
+
+# A failed lookup stops the run. The one exception is a repository that only an extra remote
+# points at and that GitHub cannot find or the user cannot see (a stale remote): that is a
+# warning naming the remote, and the search goes on. Origin's repository, its parent and --repo
+# never get the exception, and neither does any other kind of error (network, auth, rate limit).
+# lookup_failed <candidate> <remote or ""> <what> <error file>: returns 0 when the run may go on.
+lookup_failed() {
+  local candidate="$1" remote="$2" what="$3" errfile="$4" first
+  first=$(head -n 1 "$errfile")
+  if [ -n "$remote" ]; then
+    if grep -q 'Could not resolve to a Repository' "$errfile"; then
+      warn "remote '$remote' points at $candidate, which GitHub cannot find or you cannot see: skipped (remove it with git remote remove $remote or fix its URL)"
+      return 0
+    fi
+    die "$what for $candidate failed: $first. This repository comes from the remote '$remote': fix access to it, or remove the remote with git remote remove $remote or fix its URL. Otherwise run this outside the sandbox (a sandbox blocks the GitHub network and keyring) and log in with gh auth login."
+  fi
+  die "$what for $candidate failed: $first. Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, and check access to $candidate."
 }
 if [ "$HAVE_GH" = 1 ]; then
   [ -n "$HEAD_REPO" ] || die "origin URL '$ORIGIN_URL' does not name an owner/repo: the GitHub lookups need it"
@@ -252,15 +272,18 @@ if [ "$HAVE_GH" = 1 ]; then
   add_candidate "$HEAD_REPO"
   add_candidate "$VIEW_PARENT"
   while IFS= read -r remote; do
-    [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")"
+    [ "$remote" = origin ] || add_candidate "$(repo_of_url "$(git remote get-url "$remote")")" "$remote"
   done < <(git remote)
   HEAD_OWNER="${HEAD_REPO%%/*}"
   PR_LOOKUP=none
   : > "$TMP/open-all.ndjson"
   PR_FIELDS=number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state
   PR_LIST_LIMIT=100
+  candidate_index=-1
   for candidate in "${CANDIDATES[@]}"; do
-    # Any candidate that cannot be searched stops the run: an incomplete search could report
+    candidate_index=$((candidate_index + 1))
+    candidate_remote="${CANDIDATE_REMOTES[$candidate_index]}"
+    # Any candidate that cannot be searched stops the run (see lookup_failed): an incomplete search could report
     # none or found while a second PR exists, or let a create go out unchecked.
     if [ "$PR_GIVEN" = 1 ]; then
       # An exact number needs no listing: a listing is capped and could hide the PR.
@@ -270,7 +293,8 @@ if [ "$HAVE_GH" = 1 ]; then
       elif grep -qiE 'Could not resolve to a PullRequest|no pull requests found' "$TMP/pr.err"; then
         echo '[]' > "$TMP/pr.list"
       else
-        die "gh pr view for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, and check access to $candidate."
+        lookup_failed "$candidate" "$candidate_remote" "gh pr view" "$TMP/pr.err"
+        continue
       fi
       jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
         '.[] | select(.state == "OPEN" and .headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o) | {number, url, title, body, isDraft, baseRefName, headRefOid}' \
@@ -278,9 +302,11 @@ if [ "$HAVE_GH" = 1 ]; then
     fi
     # The listing of open PRs from this branch. With --pr it only fills open_prs, so a full page
     # is a warning; without --pr it decides the result, so a full page is an error.
-    GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state open --limit "$PR_LIST_LIMIT" \
-      --json "$PR_FIELDS" > "$TMP/pr.list" 2> "$TMP/pr.err" \
-      || die "gh pr list for $candidate failed: $(head -n 1 "$TMP/pr.err"). Run this outside the sandbox (a sandbox blocks the GitHub network and keyring), log in with gh auth login, and check access to $candidate."
+    if ! GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state open --limit "$PR_LIST_LIMIT" \
+      --json "$PR_FIELDS" > "$TMP/pr.list" 2> "$TMP/pr.err"; then
+      lookup_failed "$candidate" "$candidate_remote" "gh pr list" "$TMP/pr.err"
+      continue
+    fi
     if [ "$(jq length "$TMP/pr.list")" -ge "$PR_LIST_LIMIT" ]; then
       if [ "$PR_GIVEN" = 1 ]; then
         warn "$PR_LIST_LIMIT open PRs came back for this branch name in $candidate: open_prs may be incomplete"
