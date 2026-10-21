@@ -17,8 +17,9 @@ export GIT_TERMINAL_PROMPT=0
 # Fake gh: answers `pr view` and `repo view` from FAKE_GH_* variables and logs every call.
 FAKEBIN="$WORK/bin"
 mkdir -p "$FAKEBIN"
-cat > "$FAKEBIN/gh" << 'FAKE_EOF'
-#!/usr/bin/env bash
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'FAKE_EOF'
 echo "$*" >> "${FAKE_GH_LOG:-/dev/null}"
 # Like gh: --jq <expr> filters the JSON output.
 jq_expr=""
@@ -94,7 +95,8 @@ case "$1 $2" in
       for missing in ${FAKE_GH_MISSING:-}; do
         if [ "$missing" = "${3:-}" ]; then echo "GraphQL: Could not resolve to a Repository with the name '$missing'. (repository)" >&2; exit 1; fi
       done
-      base_json="${FAKE_GH_PARENT_JSON:-{\}}"
+      empty_json='{}' # not written inline: bash 3.2 keeps the backslash in ${VAR:-{\}}
+      base_json="${FAKE_GH_PARENT_JSON:-$empty_json}"
       if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$target" = "$FAKE_GH_REDIRECT_FROM" ]; then target="$FAKE_GH_REDIRECT_TO"; fi
       jq -c --arg n "$target" '. + {nameWithOwner: $n}' <<< "$base_json"
       exit 0
@@ -110,6 +112,7 @@ case "$1 $2" in
 esac
 exit 1
 FAKE_EOF
+} > "$FAKEBIN/gh"
 chmod +x "$FAKEBIN/gh"
 export PATH="$FAKEBIN:$PATH"
 export FAKE_GH_LOG="$WORK/gh.log"
@@ -666,7 +669,7 @@ check "head sync: deleted remote head" '.head_status' remote-missing
 GERMAN_BIN="$WORK/german-bin"
 mkdir -p "$GERMAN_BIN"
 cat > "$GERMAN_BIN/git" << GERMAN_EOF
-#!/usr/bin/env bash
+#!$BASH
 err=\$(mktemp "\${TMPDIR:-/tmp}/german-git.XXXXXX")
 "$(command -v git)" "\$@" 2> "\$err"
 rc=\$?
@@ -977,7 +980,7 @@ REAL_GIT=$(command -v git)
 LOGGIT="$WORK/loggit"
 mkdir -p "$LOGGIT"
 cat > "$LOGGIT/git" << LOGGIT_EOF
-#!/usr/bin/env bash
+#!$BASH
 printf '%s\\n' "\$*" >> "$WORK/git-calls.log"
 exec "$REAL_GIT" "\$@"
 LOGGIT_EOF
@@ -997,7 +1000,7 @@ feature feature/sshfail
 SSHFAIL="$WORK/sshfail-bin"
 mkdir -p "$SSHFAIL"
 cat > "$SSHFAIL/git" << SSHFAIL_EOF
-#!/usr/bin/env bash
+#!$BASH
 # Fails fetch (or ls-remote, when FAKE_SSH_FAIL=ls-remote) like a broken ssh-agent does.
 cmd="\$1"
 if [ "\$cmd" = "-c" ]; then cmd="\$3"; fi
