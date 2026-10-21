@@ -201,6 +201,17 @@ add_candidate() { # <owner/repo>: append once, case-insensitively, when it is a 
 }
 if [ "$HAVE_GH" = 1 ]; then
   [ -n "$HEAD_REPO" ] || die "origin URL '$ORIGIN_URL' does not name an owner/repo: the GitHub lookups need it"
+  # --repo may carry the old name of a renamed repository: GitHub redirects it, but the PR URLs
+  # carry the canonical name, so compare and report that one.
+  if [ -n "$REPO_ARG" ]; then
+    if CANONICAL=$(GH_PROMPT_DISABLED=1 gh repo view "$REPO_ARG" --json nameWithOwner --jq .nameWithOwner 2> "$TMP/canon.err") \
+      && valid_repo "$CANONICAL"; then
+      [ "$(lower "$CANONICAL")" = "$(lower "$REPO_ARG")" ] || warn "--repo $REPO_ARG is now named $CANONICAL: using that"
+      REPO_ARG="$CANONICAL"
+    else
+      die "gh could not find the repository $REPO_ARG: $(head -n 1 "$TMP/canon.err"). Check the name, or run this outside the sandbox."
+    fi
+  fi
   if GH_PROMPT_DISABLED=1 gh repo view "$HEAD_REPO" --json nameWithOwner,parent,defaultBranchRef \
     > "$TMP/repo.json" 2> "$TMP/repo.err"; then
     VIEW_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
@@ -261,7 +272,7 @@ if [ "$HAVE_GH" = 1 ]; then
       *) die "PR #$PR_ARG exists in several repositories: add --repo <owner/name>" ;;
     esac
   elif [ -n "$REPO_ARG" ] && [ "$(jq length "$TMP/open-sel.json")" -lt "$(jq length "$TMP/open-all.json")" ]; then
-    warn "open PRs from this branch outside $REPO_ARG are not selected: $(jq -r '[.[] | "#\(.number) \(.url)"] | join(", ")' "$TMP/open-all.json")"
+    warn "open PRs from this branch outside $REPO_ARG are not selected: $(jq -r --slurpfile sel "$TMP/open-sel.json" '[.[] | . as $p | select(($sel[0] | map(.url) | index($p.url)) == null) | "#\(.number) \(.url)"] | join(", ")' "$TMP/open-all.json")"
   fi
   OPEN_COUNT=$(jq length "$TMP/open-sel.json")
   if [ "$OPEN_COUNT" = 1 ]; then
