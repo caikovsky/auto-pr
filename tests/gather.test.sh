@@ -17,8 +17,9 @@ export GIT_TERMINAL_PROMPT=0
 # Fake gh: answers `pr view` and `repo view` from FAKE_GH_* variables and logs every call.
 FAKEBIN="$WORK/bin"
 mkdir -p "$FAKEBIN"
-cat > "$FAKEBIN/gh" << 'FAKE_EOF'
-#!/usr/bin/env bash
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'FAKE_EOF'
 echo "$*" >> "${FAKE_GH_LOG:-/dev/null}"
 # Like gh: --jq <expr> filters the JSON output.
 jq_expr=""
@@ -37,9 +38,11 @@ self=$(git remote get-url origin 2> /dev/null | repo_of)
 if url=$(git remote get-url upstream 2> /dev/null); then resolved=$(printf '%s' "$url" | repo_of); else resolved="$self"; fi
 arg_repo=""
 head_arg=""
+state_arg="open"
+limit_arg="30"
 prev=""
 for arg in "$@"; do
-  case "$prev" in --repo | -R) arg_repo="$arg" ;; --head) head_arg="$arg" ;; esac
+  case "$prev" in --repo | -R) arg_repo="$arg" ;; --head) head_arg="$arg" ;; --state) state_arg="$arg" ;; --limit) limit_arg="$arg" ;; esac
   prev="$arg"
 done
 resolved="${arg_repo:-$resolved}"
@@ -48,12 +51,34 @@ if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$resolved" = "$FAKE_GH_REDIRECT_FRO
 case "$1 $2" in
   "pr view" | "pr list")
     if [ -n "${FAKE_GH_PR_ERR:-}" ]; then echo "$FAKE_GH_PR_ERR" >&2; exit 1; fi
+    for failing in ${FAKE_GH_FAIL_REPOS:-}; do
+      if [ "$failing" = "$resolved" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+    done
+    for gone in ${FAKE_GH_NOTFOUND_REPOS:-}; do
+      if [ "$gone" = "$resolved" ]; then echo "GraphQL: Could not resolve to a Repository with the name '$gone'. (repository)" >&2; exit 1; fi
+    done
     # Fake PRs (FAKE_GH_PRS, a JSON array, or the single FAKE_GH_PR_JSON) live in the repository
     # named by their URL and are found only there.
     if [ -n "${FAKE_GH_PRS:-}" ]; then prs="$FAKE_GH_PRS"; elif [ -n "${FAKE_GH_PR_JSON:-}" ]; then prs="[$FAKE_GH_PR_JSON]"; else prs="[]"; fi
     here=$(jq -c --arg r "$resolved" --arg h "$head_arg" \
       '[.[] | select((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")) == $r and (($h == "") or .headRefName == $h))]' <<< "$prs")
-    if [ "$1 $2" = "pr list" ]; then printf '%s' "$here"; exit 0; fi
+    if [ "$1 $2" = "pr list" ]; then
+      # Like gh: the state filter applies first, then the limit cuts the list.
+      jq -c --arg st "$state_arg" --argjson lim "$limit_arg" \
+        '[.[] | select($st == "all" or ($st == "open" and .state == "OPEN") or ($st == "closed" and .state == "CLOSED") or ($st == "merged" and .state == "MERGED"))] | .[:$lim]' <<< "$here"
+      exit 0
+    fi
+    case "${3:-}" in
+      '' | -*) number="" ;;
+      *) number="$3" ;;
+    esac
+    if [ -n "$number" ]; then
+      found=$(jq -c --argjson n "$number" --arg r "$resolved" \
+        '[.[] | select(.number == $n and ((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")) == $r))] | first // empty' <<< "$prs")
+      if [ -n "$found" ]; then printf '%s' "$found"; exit 0; fi
+      echo "Could not resolve to a PullRequest with the number of $number. (repository.pullRequest)" >&2
+      exit 1
+    fi
     if [ "$(jq length <<< "$here")" -gt 0 ]; then jq -c '.[0]' <<< "$here"; exit 0; fi
     echo 'no pull requests found for branch "x"' >&2
     exit 1
@@ -70,7 +95,8 @@ case "$1 $2" in
       for missing in ${FAKE_GH_MISSING:-}; do
         if [ "$missing" = "${3:-}" ]; then echo "GraphQL: Could not resolve to a Repository with the name '$missing'. (repository)" >&2; exit 1; fi
       done
-      base_json="${FAKE_GH_PARENT_JSON:-{\}}"
+      empty_json='{}' # not written inline: bash 3.2 keeps the backslash in ${VAR:-{\}}
+      base_json="${FAKE_GH_PARENT_JSON:-$empty_json}"
       if [ -n "${FAKE_GH_REDIRECT_FROM:-}" ] && [ "$target" = "$FAKE_GH_REDIRECT_FROM" ]; then target="$FAKE_GH_REDIRECT_TO"; fi
       jq -c --arg n "$target" '. + {nameWithOwner: $n}' <<< "$base_json"
       exit 0
@@ -86,6 +112,7 @@ case "$1 $2" in
 esac
 exit 1
 FAKE_EOF
+} > "$FAKEBIN/gh"
 chmod +x "$FAKEBIN/gh"
 export PATH="$FAKEBIN:$PATH"
 export FAKE_GH_LOG="$WORK/gh.log"
@@ -131,7 +158,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_NOTFOUND_REPOS FAKE_GH_FAIL_REPOS FAKE_GH_MISSING FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -141,6 +168,25 @@ feature() {
   git add feature.txt
   git commit -q -m "add feature"
   git push -q -u origin "$1"
+}
+
+# run_gather_in_path <dir> [args]: run_gather with <dir> first on PATH (a wrapper around git).
+run_gather_in_path() {
+  local PATH="$1:$PATH"
+  shift
+  run_gather "$@"
+}
+
+# expect_fail_in_path <dir> <name> <needle> [args]: expect_fail with <dir> first on PATH.
+expect_fail_in_path() {
+  local PATH="$1:$PATH"
+  shift
+  expect_fail "$@"
+}
+
+# expect <name> <expected> <actual>
+expect() {
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "$2" "$3"; fi
 }
 
 # origin_repo: owner/repo of the origin remote, as gather.sh derives it from the URL.
@@ -623,7 +669,7 @@ check "head sync: deleted remote head" '.head_status' remote-missing
 GERMAN_BIN="$WORK/german-bin"
 mkdir -p "$GERMAN_BIN"
 cat > "$GERMAN_BIN/git" << GERMAN_EOF
-#!/usr/bin/env bash
+#!$BASH
 err=\$(mktemp "\${TMPDIR:-/tmp}/german-git.XXXXXX")
 "$(command -v git)" "\$@" 2> "\$err"
 rc=\$?
@@ -632,7 +678,7 @@ rm -f "\$err"
 exit \$rc
 GERMAN_EOF
 chmod +x "$GERMAN_BIN/git"
-(PATH="$GERMAN_BIN:$PATH"; run_gather --base main)
+run_gather_in_path "$GERMAN_BIN" --base main
 check "head sync: deleted remote head under a non-English git" '.head_status' remote-missing
 check "head sync: deleted remote head has no sha" '.remote_head' null
 check_no "head sync: deleted is not in sync" '.head_in_sync'
@@ -756,11 +802,6 @@ if grep -E '^(pr|repo view|issue)' "$FAKE_GH_LOG" | grep -vE -- '(--repo|-R) |^r
 else
   ok "gh calls: all name their repository"
 fi
-# defensive invariant: if gh names another repository for origin, the target is a guess
-export FAKE_GH_REPO_JSON='{"nameWithOwner":"acme/lib","parent":null,"defaultBranchRef":{"name":"main"}}'
-run_gather
-check "gh names another repo for origin: needs confirmation" '.base_repo_source' needs-confirmation
-unset FAKE_GH_REPO_JSON
 
 # --- open PRs in both the fork and the parent: ask, never pick one --------------------------
 new_fork
@@ -878,6 +919,163 @@ unset FAKE_GH_REDIRECT_FROM FAKE_GH_REDIRECT_TO
 export FAKE_GH_MISSING="nope/missing"
 expect_fail "--repo that does not exist exits 2" "could not find" --repo nope/missing
 unset FAKE_GH_MISSING FAKE_GH_PRS
+
+# --- the result cap must not hide an open PR ------------------------------------------------
+new_repo
+feature feature/capped
+sha=$(git rev-parse HEAD)
+me_pr=$(pr_json 7 false main OPEN "$sha")
+origin_name=$(origin_repo)
+# 60 newer closed PRs from other forks with this branch name, then mine
+others=$(jq -nc --arg repo "$origin_name" --arg b feature/capped '
+  [range(0; 60) | {number: (2000 + .), url: "https://github.com/\($repo)/pull/\(2000 + .)", title: "x", body: "", isDraft: false, baseRefName: "main", headRefOid: "0", headRefName: $b, headRepositoryOwner: {login: "closer\(.)"}, state: "CLOSED"}]')
+FAKE_GH_PRS=$(jq -c --argjson mine "$me_pr" '. + [$mine]' <<< "$others")
+export FAKE_GH_PRS
+run_gather
+check "cap: an open PR behind 60 closed ones is found" '.pr.number' 7
+# 101 open PRs from other forks, then mine
+others_open=$(jq -nc --arg repo "$origin_name" --arg b feature/capped '
+  [range(0; 101) | {number: (3000 + .), url: "https://github.com/\($repo)/pull/\(3000 + .)", title: "x", body: "", isDraft: false, baseRefName: "main", headRefOid: "0", headRefName: $b, headRepositoryOwner: {login: "forker\(.)"}, state: "OPEN"}]')
+FAKE_GH_PRS=$(jq -c --argjson mine "$me_pr" '. + [$mine]' <<< "$others_open")
+export FAKE_GH_PRS
+expect_fail "cap: a full page is never treated as complete" "too many PRs for this branch name"
+run_gather --pr 7
+check "cap: --pr finds the PR without listing" '.pr.number' 7
+check "cap: --pr gives found" '.pr_lookup' found
+expect_fail "cap: --pr of a PR that does not exist exits 2" "not an open PR from this branch" --pr 9999
+unset FAKE_GH_PRS
+
+# --- a failed lookup in any candidate repository stops the run ------------------------------
+new_fork
+sha=$(git rev-parse HEAD)
+FAKE_GH_PRS="[$(pr_json 7 false main OPEN "$sha" me/lib me)]"
+export FAKE_GH_PRS
+export FAKE_GH_FAIL_REPOS="acme/lib"
+expect_fail "only the second repository fails: exit 2" "gh pr list for acme/lib failed"
+run_gather --no-network
+check "--no-network skips the lookups, so no failure" '.pr_lookup' skipped
+unset FAKE_GH_FAIL_REPOS FAKE_GH_PRS
+
+# --- origin transferred to another owner: the head owner is the canonical one ----------------
+new_repo
+feature feature/transferred
+sha=$(git rev-parse HEAD)
+old_owner=$(origin_repo | cut -d/ -f1)
+repo_name=$(origin_repo | cut -d/ -f2)
+export FAKE_GH_REPO_JSON="{\"nameWithOwner\":\"neworg/$repo_name\",\"parent\":null,\"defaultBranchRef\":{\"name\":\"main\"}}"
+FAKE_GH_PRS="[$(pr_json 5 false main OPEN "$sha" "neworg/$repo_name" neworg)]"
+export FAKE_GH_PRS
+run_gather
+check "origin transfer: the PR from the new owner is found" '.pr.number' 5
+check "origin transfer: head repo is the canonical name" '.head_repo' "neworg/$repo_name"
+check "origin transfer: warned about the URL" ".warnings | map(select(contains(\"neworg/$repo_name\") and contains(\"$old_owner\"))) | length" 1
+run_gather --pr 5
+check "origin transfer: --pr finds it too" '.pr.number' 5
+check "origin transfer: base repo is origin's repository" '.base_repo' "neworg/$repo_name"
+unset FAKE_GH_REPO_JSON FAKE_GH_PRS
+
+# --- the fork base ref is private to the run and gone afterwards ----------------------------
+new_fork
+REAL_GIT=$(command -v git)
+LOGGIT="$WORK/loggit"
+mkdir -p "$LOGGIT"
+cat > "$LOGGIT/git" << LOGGIT_EOF
+#!$BASH
+printf '%s\\n' "\$*" >> "$WORK/git-calls.log"
+exec "$REAL_GIT" "\$@"
+LOGGIT_EOF
+chmod +x "$LOGGIT/git"
+: > "$WORK/git-calls.log"
+run_gather_in_path "$LOGGIT"
+check "private base ref: the run sees only its own commit" '.commit_count' 1
+run_gather_in_path "$LOGGIT"
+refs=$(grep -o ':refs/autopr/[A-Za-z0-9_-]*' "$WORK/git-calls.log" | sort -u)
+expect "private base ref: two runs used two different refs" 2 "$(printf '%s\n' "$refs" | grep -c .)"
+if printf '%s\n' "$refs" | grep -qx ':refs/autopr/base'; then bad "private base ref: no shared name" "no refs/autopr/base" "$refs"; else ok "private base ref: no shared name"; fi
+expect "private base ref: nothing is left after the runs" "" "$(git for-each-ref refs/autopr)"
+
+# --- SSH failures say so, and say how to get past them --------------------------------------
+new_repo
+feature feature/sshfail
+SSHFAIL="$WORK/sshfail-bin"
+mkdir -p "$SSHFAIL"
+cat > "$SSHFAIL/git" << SSHFAIL_EOF
+#!$BASH
+# Fails fetch (or ls-remote, when FAKE_SSH_FAIL=ls-remote) like a broken ssh-agent does.
+cmd="\$1"
+if [ "\$cmd" = "-c" ]; then cmd="\$3"; fi
+if [ "\$cmd" = "\${FAKE_SSH_FAIL:-fetch}" ]; then
+  echo 'sign_and_send_pubkey: signing failed for RSA "/home/u/.ssh/id_rsa" from agent: communication with agent failed' >&2
+  echo 'git@github.com: Permission denied (publickey).' >&2
+  echo 'fatal: Could not read from remote repository.' >&2
+  exit 128
+fi
+exec "$(command -v git)" "\$@"
+SSHFAIL_EOF
+chmod +x "$SSHFAIL/git"
+expect_fail_in_path "$SSHFAIL" "ssh failure on the base fetch: names SSH" "SSH" --base main
+expect_fail_in_path "$SSHFAIL" "ssh failure: suggests the ssh-agent" "ssh-agent" --base main
+EXPECTED_REWRITE="GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_1=ssh://git@github.com/ GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_2=ssh://git@github.com:22/ GIT_CONFIG_KEY_3=credential.helper GIT_CONFIG_VALUE_3='!gh auth git-credential'"
+expect_fail_in_path "$SSHFAIL" "ssh failure: shows the HTTPS rewrite" "$EXPECTED_REWRITE" --base main
+# The printed environment must really rewrite every SSH URL form to HTTPS. `git ls-remote
+# --get-url` prints the URL after insteadOf is applied, so no network is needed.
+rewrite=$(sed -n 's/.*this command only (no git config is edited): //p' "$ERR" | head -n 1)
+expect "the printed rewrite is the expected one" "$EXPECTED_REWRITE" "$rewrite"
+for url in git@github.com:acme/lib.git ssh://git@github.com/acme/lib.git ssh://git@github.com:22/acme/lib.git; do
+  git remote set-url origin "$url"
+  got=$(eval "env $rewrite git ls-remote --get-url origin")
+  expect "the printed rewrite turns $url into https" https://github.com/acme/lib.git "$got"
+done
+git remote set-url origin "$DIR/origin.git"
+git remote set-url origin git@github.com:acme/lib.git
+expect "without the rewrite the same URL stays SSH" git@github.com:acme/lib.git "$(git ls-remote --get-url origin)"
+git remote set-url origin "$DIR/origin.git"
+expect_fail_in_path "$SSHFAIL" "ssh failure: says it is per command, not a config edit" "this command only" --base main
+FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names SSH" "SSH" --base main
+FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names ls-remote" "ls-remote" --base main
+# a dead local remote is not an SSH problem
+git remote set-url origin "$DIR/missing.git"
+expect_fail "a dead local remote does not mention SSH" "git fetch origin main failed" --base main
+if grep -q "SSH" "$ERR"; then bad "a dead local remote: no SSH hint" "no SSH hint" "$(cat "$ERR")"; else ok "a dead local remote: no SSH hint"; fi
+
+# --- a stale extra remote must not break every run -------------------------------------------
+new_repo
+feature feature/stale
+sha=$(git rev-parse HEAD)
+git remote add stale "$DIR/gone/proj.git"
+export FAKE_GH_NOTFOUND_REPOS="gone/proj"
+run_gather
+check "stale remote, repo not found: the run continues" '.pr_lookup' none
+check "stale remote: one warning names the remote" '.warnings | map(select(contains("remote '"'"'stale'"'"' points at gone/proj"))) | length' 1
+check "stale remote: the warning says how to fix it" '.warnings | map(select(contains("git remote remove stale") and contains("cannot find or you cannot see"))) | length' 1
+FAKE_GH_PRS="[$(pr_json 7 false main OPEN "$sha")]"
+export FAKE_GH_PRS
+run_gather
+check "stale remote with an open PR: found" '.pr.number' 7
+check "stale remote with an open PR: still warned" '.warnings | map(select(contains("remote '"'"'stale'"'"'"))) | length' 1
+run_gather --pr 7
+check "stale remote with --pr: found" '.pr.number' 7
+check "stale remote with --pr: still warned" '.warnings | map(select(contains("remote '"'"'stale'"'"'"))) | length' 1
+FAKE_GH_DEFAULT=main run_gather --repo "$(origin_repo)"
+check "stale remote with --repo: the run continues (--repo does not hide the warning)" '.pr.number' 7
+unset FAKE_GH_NOTFOUND_REPOS
+export FAKE_GH_FAIL_REPOS="gone/proj"
+expect_fail "stale remote, transient error: exit 2" "remote 'stale'"
+expect_fail "stale remote, transient error: says how to fix it" "git remote remove stale"
+unset FAKE_GH_FAIL_REPOS FAKE_GH_PRS
+# origin's own repository, its parent and --repo stay strict, whatever the error
+new_fork
+export FAKE_GH_NOTFOUND_REPOS="acme/lib"
+expect_fail "parent not found: exit 2" "gh pr list for acme/lib failed"
+unset FAKE_GH_NOTFOUND_REPOS
+export FAKE_GH_NOTFOUND_REPOS="me/lib"
+expect_fail "origin repo not found: exit 2" "gh pr list for me/lib failed"
+unset FAKE_GH_NOTFOUND_REPOS
+new_repo
+feature feature/argrepo
+export FAKE_GH_NOTFOUND_REPOS="gone/proj"
+expect_fail "--repo candidate not found: exit 2" "gh pr list for gone/proj failed" --repo gone/proj
+unset FAKE_GH_NOTFOUND_REPOS
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
 new_fork

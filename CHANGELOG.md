@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.1
+
+Fixes from the second Copilot review of #8, after it merged, and fixes from the first end-to-end run of the skill. No new arguments.
+
+- `gather.sh` lists open PRs with `gh pr list --state open --limit 100` and stops (exit 2, "pass `--pr`") when a full page comes back, instead of treating a cut list as complete. Before, `--state all --limit 50` could hide an older open PR behind newer closed PRs or PRs from other forks with the same branch name. `--pr <number>` reads the PR with `gh pr view`, so the cap cannot reject it.
+- A failed PR lookup in any candidate repository (not only the first) exits 2. Before, a failed second lookup was a warning, so a PR in the parent could go unseen.
+- After a transfer or rename of the origin repository, the owner used to match PRs comes from GitHub's canonical name (`gh repo view <origin repo>`), not from the old URL. A warning names the difference.
+- A generated PR title has at most 72 characters: a single commit subject or an issue title that is longer is replaced by an imperative summary. A verified Jira title is not capped.
+- The Copilot reviewer request is retried once when the error looks transient (TLS or other timeout, EOF, connection reset, HTTP 5xx), and never on not-found or permission errors. Before, a TLS timeout was reported like a disabled Copilot review.
+- A git fetch or ls-remote that fails over SSH (a broken ssh-agent, a missing key, "Permission denied (publickey)") now says so, and prints the HTTPS rewrite (environment variables for one command, no git config edit) as the way past it. The rewrite covers `git@github.com:`, `ssh://git@github.com/` and `ssh://git@github.com:22/` origins, and a test runs `git ls-remote --get-url` under the printed variables to prove each form becomes an https URL. SKILL.md has an error-table row for it.
+- A stale extra remote (it points at a repository GitHub cannot find or you cannot see) no longer stops every run: it is skipped with a warning naming the remote and the fix (`git remote remove <name>` or a corrected URL). Any other failure for such a remote (network, auth, rate limit) still exits 2, and the message names the remote. Failures for origin's repository, its parent and `--repo` stay fatal.
+- The fork base is fetched into a ref private to the run (`refs/autopr/base-<pid>-<n>`), its commit id is pinned for the merge base, log and diff, and the ref is deleted on exit, so parallel runs in one checkout cannot overwrite each other's base.
+- `tests/version.test.sh` checks that `plugin.json`, the SKILL.md `metadata.version` and the newest `CHANGELOG.md` version heading agree and are valid SemVer (each pre-release and build identifier is checked: no empty ones, no leading zero in a numeric pre-release identifier), so a release cannot go out with the versions apart. It runs in both CI jobs.
+
 ## 1.6.0
 
 - PR titles drop bracketed tags from the Jira summary (`[AN]`, `[Android]`, `[iOS]`, `[SPIKE]`, `[PoC]`, in any position). `scripts/clean-title.sh` does it; the rules come from the former Python CLI (issue #5, CLI change #7). A summary that is only tags keeps its original text.

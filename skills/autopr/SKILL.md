@@ -3,7 +3,7 @@ name: autopr
 description: Creates or updates the GitHub pull request for the current branch. Gathers git context against the up-to-date base branch, reads the Jira ticket named in the branch via acli, fills the repo's PR template, and runs gh. Use when the user says "autopr", "create pr", "open pr", "make pr", "push and open PR", "ship it", "update the pr" or "pr description". Does not review, summarize or comment on existing PRs. Never pushes or commits; it stops if the branch is not pushed.
 license: MIT
 metadata:
-  version: "1.6.0"
+  version: "1.6.1"
 ---
 
 # AutoPR
@@ -49,11 +49,11 @@ Run `scripts/gather.sh` from this skill's directory, with the repository as the 
 - `template` (`path`, `content`, or null), `other_templates`
 - `pr` (`number`, `url`, `title`, `body`, `isDraft`, `baseRefName`, `headRefOid`, or null), `pr_lookup` (`found`, `none`, `ambiguous` or `skipped`), `open_prs` (the full list of open PRs from this branch, across all candidate repositories, even when `--pr` or `--repo` selects one: `number`, `url`, `repo`, `baseRefName`), `warnings`
 
-`gather.sh` looks for the PR in these repositories: the repository of `origin`, its parent, the repository of every other remote, and `--repo` when it names another one. `open_prs` always lists every open PR from this branch found there (deduplicated by URL), whatever is selected. Exactly one open PR gives `found`; none gives `none`; more than one gives `ambiguous`, with `pr` null. Only an explicit choice selects one of several: `--pr <number>` (the number is read in `--repo`'s repository when `--repo` is given; exit 2 when it is not an open PR from this branch, or exists in several repositories and `--repo` is missing), or `--repo` alone (the PR in that repository; the others are reported in a warning). **`--base` never selects a PR.** It sets the base of the diff and of a new PR, and on update it changes the base of the one PR that was selected. A PR that comes back from two candidates (a renamed repository redirects) counts once.
+`gather.sh` looks for the PR in these repositories: the repository of `origin`, its parent, the repository of every other remote, and `--repo` when it names another one. A repository that only an extra remote points at, and that GitHub cannot find or you cannot see (a stale remote), is skipped with a warning that names the remote and the fix (`git remote remove <name>`); every other lookup failure stops the run. `open_prs` always lists every open PR from this branch found there (deduplicated by URL), whatever is selected. Exactly one open PR gives `found`; none gives `none`; more than one gives `ambiguous`, with `pr` null. Only an explicit choice selects one of several: `--pr <number>` (the number is read in `--repo`'s repository when `--repo` is given; exit 2 when it is not an open PR from this branch, or exists in several repositories and `--repo` is missing), or `--repo` alone (the PR in that repository; the others are reported in a warning). **`--base` never selects a PR.** It sets the base of the diff and of a new PR, and on update it changes the base of the one PR that was selected. A PR that comes back from two candidates (a renamed repository redirects) counts once.
 
 The diff is the merge-base diff against a freshly fetched base, so it holds only this branch's commits and no uncommitted edits. When the PR targets another repository than `origin` (a fork PR), the base comes from that repository, never from the fork's possibly stale branch.
 
-`gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed GitHub PR lookup or `git fetch`, or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
+`gather.sh` exits 2 with a message on stderr when it cannot give a trustworthy result: no `origin`, detached HEAD, a failed GitHub PR lookup in any candidate repository (an incomplete search is never reported as a result), a failed `git fetch`, a branch name with 100 or more open PRs in one repository (the list may be cut: pass `--pr <number>`), or no merge base (for a shallow clone, run `git fetch --unshallow`). Show the message and stop. Do not fall back to "create a new PR".
 
 Print every entry of `warnings`. Then check:
 
@@ -89,10 +89,10 @@ Write the title and body yourself; call no other AI tool.
   ```bash
   jq -r .fields.summary <work-dir>/jira.json | scripts/clean-title.sh | { printf '[<KEY>] - '; cat; } > <work-dir>/title.txt
   ```
-- New PR without a ticket: use the first rule that applies.
+- New PR without a ticket: use the first rule that applies. The title has at most 72 characters: when the text a rule gives is longer, write an imperative summary of the commits that fits instead.
   1. `linked_issues` is not empty: the title of the first issue: `gh issue view <N> --repo '<base_repo>' --json title --jq .title > <work-dir>/title.txt` (outside the sandbox). If the call fails, warn once and go on.
   2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`), written to `<work-dir>/title.txt` with your file-writing tool.
-  3. Write a short summary of the commits to `<work-dir>/title.txt`: imperative mood, at most 72 characters.
+  3. Write a short summary of the commits to `<work-dir>/title.txt`: imperative mood.
   4. Only if the commits say nothing useful (for example `wip`): derive it from the branch name (`/` to `: `, `-` to a space, title case) and write it to `<work-dir>/title.txt`.
 - Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 
@@ -136,7 +136,7 @@ gh pr create --repo '<base_repo>' --head '<branch>' --base '<base>' --title "$(c
 gh pr edit <number> --repo '<base_repo>' --add-reviewer @copilot
 ```
 
-`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. Exit code 0 means the request succeeded. Do not re-check it: `reviewRequests` can stay empty for a bot reviewer. Only on a non-zero exit (Copilot review may be off for the repo), warn once and continue. Take `<number>` from the URL that the create command prints.
+`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. Exit code 0 means the request succeeded. Do not re-check it: `reviewRequests` can stay empty for a bot reviewer. On a non-zero exit, read the error. When it looks transient (a TLS handshake timeout, a timeout, EOF, a connection reset or an HTTP 5xx), run the same command once more. Do not retry on not found, permission or validation errors (Copilot review may be off for the repo). If the command still fails, warn once and continue. Take `<number>` from the URL that the create command prints.
 
 **`pr` exists (update):**
 
@@ -176,7 +176,8 @@ Remove the work directory files (`rm -f <work-dir>/*.txt <work-dir>/body.md <wor
 | Error | Action |
 |-------|--------|
 | Not in a git repo | Stop: "Not in a git repository." |
-| `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure, no merge base, unknown base). Stop. |
+| `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure in any repository, too many PRs for the branch name, no merge base, unknown base). Stop. |
+| `gather.sh` names SSH | The git fetch or ls-remote failed over SSH (a broken ssh-agent, a missing key). Show the message, which names the fix: check the ssh-agent, or run `gather.sh` again with the HTTPS rewrite (environment variables, for that command only) it prints. Never edit git config. |
 | No commits ahead | Stop: "No commits between base and head." |
 | Branch not pushed | Stop with the push command (see section 2). |
 | `gh` missing or logged out | Stop with the install or login command. |
