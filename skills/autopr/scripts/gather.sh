@@ -8,6 +8,7 @@
 #
 # Read-only: never commits, pushes or edits files. Exit 2 on a fatal error (message on stderr):
 # no repo, no origin, detached HEAD, a gh or git fetch failure, or no merge base with the base branch.
+# Network runs fetch refs: origin/<base> (or refs/autopr/base for a fork PR) and origin/<branch>.
 # A shell pipe that closes early (| head) kills the writer with SIGPIPE under pipefail, so every
 # command with long output goes through a temp file instead.
 set -euo pipefail
@@ -75,6 +76,15 @@ has_exact() {
   return 1
 }
 
+# owner/repo from a remote URL (scp-like, https or a local path ending in owner/repo[.git]).
+repo_of_url() {
+  printf '%s' "$1" | sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##'
+}
+
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 # git with unescaped non-ASCII paths in names and diff headers.
 qgit() {
   git -c core.quotePath=false "$@"
@@ -121,7 +131,7 @@ fi
 echo null > "$TMP/pr.json"
 PR_BASE=""
 if [ "$HAVE_GH" = 1 ]; then
-  if GH_PROMPT_DISABLED=1 gh pr view --json number,url,title,body,isDraft,baseRefName,state \
+  if GH_PROMPT_DISABLED=1 gh pr view --json number,url,title,body,isDraft,baseRefName,headRefOid,state \
     > "$TMP/pr.raw" 2> "$TMP/pr.err"; then
     PR_STATE=$(jq -r .state "$TMP/pr.raw")
     if [ "$PR_STATE" = OPEN ]; then
@@ -139,6 +149,41 @@ if [ "$HAVE_GH" = 1 ]; then
   fi
 fi
 
+# Base repository: the repo the PR targets. For an open PR it is in the PR URL; otherwise it is
+# gh's view of this repo, or its parent when origin is a fork. Unknown (null) without gh.
+valid_repo() {
+  case "$1" in
+    */*/* | */ | /* | '') return 1 ;;
+  esac
+  [ -z "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9._/-')" ]
+}
+BASE_REPO=""
+REPO_DEFAULT=""
+REPO_VIEW_FAILED=""
+if [ "$PR_LOOKUP" = found ]; then
+  BASE_REPO=$(jq -r .url "$TMP/pr.json" | sed -nE 's#^https?://[^/]+/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+elif [ "$HAVE_GH" = 1 ]; then
+  if GH_PROMPT_DISABLED=1 gh repo view --json nameWithOwner,parent,defaultBranchRef \
+    > "$TMP/repo.json" 2> "$TMP/repo.err"; then
+    PARENT=$(jq -r 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end' "$TMP/repo.json")
+    if [ -n "$PARENT" ] && valid_repo "$PARENT"; then
+      BASE_REPO="$PARENT"
+      if GH_PROMPT_DISABLED=1 gh repo view "$PARENT" --json defaultBranchRef > "$TMP/parent.json" 2> /dev/null; then
+        REPO_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/parent.json")
+      fi
+    else
+      BASE_REPO=$(jq -r '.nameWithOwner // empty' "$TMP/repo.json")
+      REPO_DEFAULT=$(jq -r '.defaultBranchRef.name // empty' "$TMP/repo.json")
+    fi
+  else
+    REPO_VIEW_FAILED=$(head -n 1 "$TMP/repo.err")
+  fi
+fi
+if [ -n "$BASE_REPO" ] && ! valid_repo "$BASE_REPO"; then
+  warn "ignoring base repository '$BASE_REPO': not an owner/repo name"
+  BASE_REPO=""
+fi
+
 # Base branch: --base > existing PR > repo default (gh) > origin/HEAD > main/master/develop.
 BASE=""
 BASE_SOURCE=""
@@ -149,14 +194,12 @@ elif [ -n "$PR_BASE" ]; then
   BASE="$PR_BASE"
   BASE_SOURCE="pull-request"
 fi
-if [ -z "$BASE" ] && [ "$HAVE_GH" = 1 ]; then
-  if BASE=$(GH_PROMPT_DISABLED=1 gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2> "$TMP/repo.err") \
-    && [ -n "$BASE" ]; then
-    BASE_SOURCE="gh-default-branch"
-  else
-    BASE=""
-    warn "gh repo view failed: $(head -n 1 "$TMP/repo.err")"
-  fi
+if [ -z "$BASE" ] && [ -n "$REPO_DEFAULT" ]; then
+  BASE="$REPO_DEFAULT"
+  BASE_SOURCE="gh-default-branch"
+fi
+if [ -z "$BASE" ] && [ -n "$REPO_VIEW_FAILED" ]; then
+  warn "gh repo view failed: $REPO_VIEW_FAILED"
 fi
 if [ -z "$BASE" ]; then
   if HEAD_REF=$(git symbolic-ref --short refs/remotes/origin/HEAD 2> /dev/null); then
@@ -176,27 +219,55 @@ fi
 [ -n "$BASE" ] || die "cannot determine the base branch: pass --base <branch>"
 require_safe_name base "$BASE"
 
-# The explicit refspec also stores origin/<base> in single-branch clones.
-if [ "$NO_NETWORK" != 1 ]; then
+# Fetch the base. Normally origin holds it (the explicit refspec also stores origin/<base> in
+# single-branch clones). When the PR targets another repository (a fork PR: origin is the fork),
+# fetch the base from a remote that points at that repository, or by URL, into refs/autopr/base,
+# so a stale fork branch never shapes the diff.
+ORIGIN_URL=$(git remote get-url origin)
+HEAD_REPO=$(repo_of_url "$ORIGIN_URL")
+if ! valid_repo "$HEAD_REPO"; then
+  warn "origin URL does not name an owner/repo: fork detection is off"
+  HEAD_REPO=""
+fi
+BASE_REMOTE=origin
+BASE_REF="origin/$BASE"
+if [ "$NO_NETWORK" != 1 ] && [ -n "$BASE_REPO" ] && [ -n "$HEAD_REPO" ] && [ "$(lower "$BASE_REPO")" != "$(lower "$HEAD_REPO")" ]; then
+  BASE_REMOTE=""
+  while IFS= read -r remote; do
+    if [ "$(lower "$(repo_of_url "$(git remote get-url "$remote")")")" = "$(lower "$BASE_REPO")" ]; then
+      BASE_REMOTE="$remote"
+      break
+    fi
+  done < <(git remote)
+  if [ -n "$BASE_REMOTE" ]; then
+    FETCH_FROM="$BASE_REMOTE"
+  else
+    FETCH_FROM=$(printf '%s' "$ORIGIN_URL" | sed -E "s#^(.*[:/])[^/:]+/[^/]+\$#\1$BASE_REPO.git#")
+    warn "no local remote points at $BASE_REPO: fetched $BASE from $FETCH_FROM"
+  fi
+  git fetch --quiet "$FETCH_FROM" "+refs/heads/$BASE:refs/autopr/base" 2> "$TMP/fetch.err" \
+    || die "git fetch $FETCH_FROM $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
+  BASE_REF="refs/autopr/base"
+elif [ "$NO_NETWORK" != 1 ]; then
   git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2> "$TMP/fetch.err" \
     || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
 fi
-git rev-parse --verify --quiet "refs/remotes/origin/$BASE^{commit}" > /dev/null \
-  || die "origin/$BASE not found: fetch it or pass a different --base"
-if ! git merge-base "origin/$BASE" HEAD > /dev/null 2>&1; then
+git rev-parse --verify --quiet "$BASE_REF^{commit}" > /dev/null \
+  || die "$BASE_REF not found: fetch it or pass a different --base"
+if ! git merge-base "$BASE_REF" HEAD > /dev/null 2>&1; then
   if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-    die "no merge base with origin/$BASE in this shallow clone: run git fetch --unshallow, then run again"
+    die "no merge base with $BASE_REF in this shallow clone: run git fetch --unshallow, then run again"
   fi
-  die "no merge base between HEAD and origin/$BASE: the branches share no history, check --base"
+  die "no merge base between HEAD and $BASE_REF: the branches share no history, check --base"
 fi
 
-RANGE="origin/$BASE...HEAD"
+RANGE="$BASE_REF...HEAD"
 
-qgit log --no-decorate --format='%h %s' "origin/$BASE..HEAD" | lines_json > "$TMP/commits.json"
+qgit log --no-decorate --format='%h %s' "$BASE_REF..HEAD" | lines_json > "$TMP/commits.json"
 # Issues the branch closes: "closes|fixes|resolves #N" (any tense, optional colon, digits must end
 # at a word boundary) in its commit messages. Bare #N is ignored: it is usually a PR number, as in
 # "Add feature (#7)".
-git log --format=%B "origin/$BASE..HEAD" > "$TMP/messages.txt"
+git log --format=%B "$BASE_REF..HEAD" > "$TMP/messages.txt"
 { grep -Eio '(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+([^[:alnum:]]|$)' "$TMP/messages.txt" || true; } \
   | { grep -Eo '#[0-9]+' || true; } | tr -d '#' | sort -nu \
   | jq -Rn '[inputs | select(length > 0) | tonumber]' > "$TMP/linked.json"
@@ -233,6 +304,36 @@ if [ "$(wc -c < "$TMP/diff.txt" | tr -d ' ')" -gt "$MAX_DIFF_BYTES" ]; then
   head -c "$MAX_DIFF_BYTES" "$TMP/diff.txt" > "$TMP/diff.cut"
   mv "$TMP/diff.cut" "$TMP/diff.txt"
   TRUNCATED=true
+fi
+
+# Publication guard: is the head the PR shows the head this checkout describes? Fetch the head
+# branch, then compare the remote tip with HEAD (and with the PR's head when a PR exists).
+# head_in_sync is true, false, or null when the network was skipped.
+HEAD_SHA=$(git rev-parse HEAD)
+REMOTE_HEAD=""
+HEAD_STATUS="skipped"
+if [ "$NO_NETWORK" != 1 ]; then
+  if git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2> "$TMP/fetch-head.err"; then
+    REMOTE_HEAD=$(git rev-parse "refs/remotes/origin/$BRANCH")
+    PR_HEAD=$(jq -r '.headRefOid // empty' "$TMP/pr.json")
+    if [ "$REMOTE_HEAD" = "$HEAD_SHA" ]; then
+      if [ -n "$PR_HEAD" ] && [ "$PR_HEAD" != "$HEAD_SHA" ]; then
+        HEAD_STATUS="pr-head-mismatch"
+      else
+        HEAD_STATUS="in-sync"
+      fi
+    elif git merge-base --is-ancestor "$HEAD_SHA" "$REMOTE_HEAD"; then
+      HEAD_STATUS="remote-ahead"
+    elif git merge-base --is-ancestor "$REMOTE_HEAD" "$HEAD_SHA"; then
+      HEAD_STATUS="local-ahead"
+    else
+      HEAD_STATUS="diverged"
+    fi
+  elif grep -qi "couldn't find remote ref" "$TMP/fetch-head.err"; then
+    HEAD_STATUS="remote-missing"
+  else
+    die "git fetch origin $BRANCH failed: $(head -n 1 "$TMP/fetch-head.err"). Run this outside the sandbox and check the network and the remote."
+  fi
 fi
 
 # Upstream status. has_upstream is true only when the configured upstream is a branch of origin
@@ -311,12 +412,20 @@ jq -n \
   --slurpfile other_templates "$TMP/other-templates.json" \
   --slurpfile pr "$TMP/pr.json" \
   --arg pr_lookup "$PR_LOOKUP" \
+  --arg base_repo "$BASE_REPO" \
+  --arg head_repo "$HEAD_REPO" \
+  --arg base_remote "$BASE_REMOTE" \
+  --arg head_status "$HEAD_STATUS" \
+  --arg remote_head "$REMOTE_HEAD" \
   --slurpfile warnings "$TMP/warnings.json" \
   '{
     branch: $branch,
     ticket_candidate: (if $ticket == "" then null else $ticket end),
     base: $base,
     base_source: $base_source,
+    base_repo: (if $base_repo == "" then null else $base_repo end),
+    head_repo: (if $head_repo == "" then null else $head_repo end),
+    base_remote: (if $base_remote == "" then null else $base_remote end),
     linked_issues: $linked[0],
     commit_count: ($commits[0] | length),
     commits: $commits[0],
@@ -329,6 +438,9 @@ jq -n \
     diff_lines: $diff_lines,
     truncated: $truncated,
     diff_excluded_files: $excluded[0],
+    head_in_sync: (if $head_status == "skipped" then null else $head_status == "in-sync" end),
+    head_status: $head_status,
+    remote_head: (if $remote_head == "" then null else $remote_head end),
     has_upstream: $has_upstream,
     upstream: (if $upstream == "" then null else $upstream end),
     unpushed_count: $unpushed,
