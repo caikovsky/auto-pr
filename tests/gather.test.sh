@@ -659,7 +659,7 @@ check "fork: files" '.files | join(",")' own.txt
 check "fork: diff omits upstream files" '.diff | contains("u1.txt") or contains("u2.txt")' false
 check "fork: no warnings" '.warnings | length' 0
 check "fork: head in sync" '.head_in_sync' true
-check "fork without a PR or default: parent needs confirmation" '.base_repo_source' fork-parent
+check "fork without a PR or default: target needs confirmation" '.base_repo_source' needs-confirmation
 
 git remote remove upstream
 run_gather
@@ -693,6 +693,21 @@ check "no fork: base remote is origin" '.base_remote' origin
 check "no fork: base repo source is origin" '.base_repo_source' origin
 unset FAKE_GH_DEFAULT
 
+# --- gh resolves to the upstream remote (parent is null): still a guess, still confirmed ------
+new_fork
+export FAKE_GH_REPO_JSON='{"nameWithOwner":"acme/lib","parent":null,"defaultBranchRef":{"name":"main"}}'
+run_gather
+check "upstream-resolving gh: base repo" '.base_repo' acme/lib
+check "upstream-resolving gh: head repo comes from the origin URL" '.head_repo' me/lib
+check "upstream-resolving gh: needs confirmation" '.base_repo_source' needs-confirmation
+check "upstream-resolving gh: only own commits" '.commit_count' 1
+run_gather --repo acme/lib
+check "upstream-resolving gh with --repo: argument" '.base_repo_source' argument
+export FAKE_GH_SET_DEFAULT=acme/lib
+run_gather
+check "upstream-resolving gh with a default: gh-default" '.base_repo_source' gh-default
+unset FAKE_GH_SET_DEFAULT FAKE_GH_REPO_JSON
+
 # --- which repository a fork PR targets: PR, --repo, gh default, then the parent (confirm) ----
 new_fork
 run_gather --repo acme/lib
@@ -717,6 +732,11 @@ run_gather --repo acme/lib --no-network
 check "--no-network ignores --repo: base repo unknown" '.base_repo' null
 check "--no-network ignores --repo: warned" '.warnings | map(select(contains("--repo"))) | length' 1
 expect_fail "--repo with a bad shape is rejected" "owner/name" --repo 'acme/lib;x'
+for bad in a ../x -x/y .x/y x/.y x/-y /x x/ a/b/c 'a b/c'; do
+  expect_fail "--repo '$bad' is rejected" "owner/name" --repo "$bad"
+done
+run_gather --no-network --repo octo-org/my.repo_1
+check "--repo octo-org/my.repo_1 is accepted" '.warnings | map(select(contains("--repo is ignored"))) | length' 1
 expect_fail "--repo needs a value" "--repo needs" --repo
 
 # --- option validation ----------------------------------------------------------------------

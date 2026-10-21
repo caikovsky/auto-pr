@@ -18,7 +18,7 @@ Write a PR description from the branch diff and the Jira ticket, then create the
 | `--draft`, `-d` | Create as draft; on update, convert the PR to draft | off |
 | `--ready` | On update, mark a draft PR ready for review | off |
 | `--base <branch>`, `-b <branch>` | Base branch. On update, a different base also changes the PR base | existing PR base, else repo default branch |
-| `--repo <owner/name>` | Repository the PR targets. Needed for a fork when no PR exists yet and no `gh repo set-default` is set | open PR's repository, else `gh` default, else the parent of a forked `origin` (asks first), else `origin` |
+| `--repo <owner/name>` | Repository the PR targets. Needed for a fork when no PR exists yet and no `gh repo set-default` is set | open PR's repository, else `gh` default, else what `gh` resolves (asks first when that is not `origin`'s repository) |
 | `--reviewer <handle>` | Request a review; repeatable | none |
 | `--label <name>` | Add a label; repeatable | none |
 | `--verbose`, `-v` | Show the full body in the preview | off |
@@ -40,7 +40,7 @@ mktemp -d "${TMPDIR:-/tmp}/autopr.XXXXXX"
 
 Run `scripts/gather.sh` from this skill's directory, with the repository as the working directory. Pass `--base '<branch>'` and `--repo '<owner/name>'` when the user gave them. It prints one JSON object:
 
-- `branch`, `head_repo` (owner/repo of `origin`), `base_repo` (owner/repo the PR targets, or null when GitHub was not asked), `base_repo_source` (`pull-request`, `argument`, `gh-default`, `fork-parent`, `origin`, or null), `base_remote` (the local remote that holds the base: `origin`, another remote, or null when it was fetched by URL), `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
+- `branch`, `head_repo` (owner/repo from the `origin` URL itself), `base_repo` (owner/repo the PR targets, or null when GitHub was not asked), `base_repo_source` (`pull-request`, `argument`, `gh-default`, `origin`, `needs-confirmation`, or null), `base_remote` (the local remote that holds the base: `origin`, another remote, or null when it was fetched by URL), `linked_issues` (issue numbers from "closes/fixes/resolves #N" in the branch's commit messages; bare `#N` is ignored), `ticket_candidate` (upper-cased `KEY-123` from the branch name, or null; not verified), `base`, `base_source`
 - `commits`, `commit_count`, `files`, `file_count`, `insertions`, `deletions`, `stat`
 - `diff`, `diff_lines`, `truncated`, `diff_excluded_files` (lockfiles and generated files stay out of the diff)
 - `head_in_sync` (true, false, or null when the network was skipped), `head_status` (`in-sync`, `local-ahead`, `remote-ahead`, `diverged`, `remote-missing`, `pr-head-mismatch` or `skipped`), `remote_head` (the sha of `origin/<branch>` after a fetch, or null)
@@ -56,7 +56,7 @@ Print every entry of `warnings`. Then check:
 
 - **Stop** when `commit_count` is 0.
 - **Stop** (unless `--dry-run`) when `pr_lookup` is `skipped`: `pr` is null because nobody asked GitHub, not because no PR exists. Creating a PR from that state can duplicate or mis-base an existing one. Run `gather.sh` again without `--no-network`, outside the sandbox. Treat `pr` as "no PR" only when `pr_lookup` is `none`.
-- **Stop** (unless `--dry-run`) when `base_repo_source` is `fork-parent` and `pr_lookup` is `none`: `origin` is a fork, and publishing to its parent is a guess that could expose internal work to a public repository. Ask the user which repository to target (`base_repo`, the parent, or `head_repo`, the fork) and run `gather.sh` again with `--repo '<owner/name>'`. Do not create the PR without that answer.
+- **Stop** (unless `--dry-run`) when `pr_lookup` is `none` and the target is not settled: `base_repo` is null, or it differs from `head_repo` while `base_repo_source` is not `argument` or `gh-default`. Whatever `gh` resolved (a fork's parent, or the `upstream` remote) is a guess, and publishing there could expose internal work to a public repository. Ask the user which repository to target (`base_repo` or `head_repo`) and run `gather.sh` again with `--repo '<owner/name>'`. Do not create the PR without that answer.
 - **Stop** (unless `--dry-run`) when `head_in_sync` is not true: the PR would not show what you are describing. Say which case applies (`head_status`):
   - `remote-missing`: `origin` has no such branch (deleted?). Run `git push -u origin <branch>`.
   - `local-ahead`: unpushed commits. Run `git push`.
