@@ -31,10 +31,33 @@ if [ -n "$jq_expr" ] && [ -z "${FAKE_GH_FILTERED:-}" ]; then
   FAKE_GH_FILTERED=1 "$0" "$@" | jq -r "$jq_expr"
   exit "${PIPESTATUS[0]}"
 fi
+# Which repository real gh uses when no --repo is given: a remote named upstream, else origin.
+repo_of() { sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##'; }
+self=$(git remote get-url origin 2> /dev/null | repo_of)
+if url=$(git remote get-url upstream 2> /dev/null); then resolved=$(printf '%s' "$url" | repo_of); else resolved="$self"; fi
+arg_repo=""
+head_arg=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in --repo | -R) arg_repo="$arg" ;; --head) head_arg="$arg" ;; esac
+  prev="$arg"
+done
+resolved="${arg_repo:-$resolved}"
 case "$1 $2" in
-  "pr view")
-    if [ -n "${FAKE_GH_PR_JSON:-}" ]; then printf '%s' "$FAKE_GH_PR_JSON"; exit 0; fi
+  "pr view" | "pr list")
     if [ -n "${FAKE_GH_PR_ERR:-}" ]; then echo "$FAKE_GH_PR_ERR" >&2; exit 1; fi
+    # The fake PR lives in the repository named by its URL; it is found only there.
+    pr_repo=""
+    if [ -n "${FAKE_GH_PR_JSON:-}" ]; then pr_repo=$(jq -r .url <<< "$FAKE_GH_PR_JSON" | sed -E 's#^https?://[^/]+/([^/]+/[^/]+)/pull/.*#\1#'); fi
+    if [ "$1 $2" = "pr list" ]; then
+      if [ "$pr_repo" = "$resolved" ] && [ "$(jq -r .headRefName <<< "$FAKE_GH_PR_JSON")" = "$head_arg" ]; then
+        printf '[%s]' "$FAKE_GH_PR_JSON"
+      else
+        printf '[]'
+      fi
+      exit 0
+    fi
+    if [ "$pr_repo" = "$resolved" ]; then printf '%s' "$FAKE_GH_PR_JSON"; exit 0; fi
     echo 'no pull requests found for branch "x"' >&2
     exit 1
     ;;
@@ -44,14 +67,15 @@ case "$1 $2" in
     exit 0
     ;;
   "repo view")
-    if [ -n "${3:-}" ] && [ "${3#-}" = "$3" ]; then # gh repo view <repo> --json defaultBranchRef
+    target="${3:-}"
+    case "$target" in -* | "") target="$resolved" ;; esac
+    if [ "$target" != "$self" ]; then # another repository: only its default branch is known
       if [ -n "${FAKE_GH_PARENT_JSON:-}" ]; then printf '%s' "$FAKE_GH_PARENT_JSON"; exit 0; fi
       echo "error connecting to api.github.com" >&2
       exit 1
     fi
     if [ -n "${FAKE_GH_REPO_JSON:-}" ]; then printf '%s' "$FAKE_GH_REPO_JSON"; exit 0; fi
     if [ -n "${FAKE_GH_DEFAULT:-}" ]; then
-      self=$(git remote get-url origin | sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##')
       printf '{"nameWithOwner":"%s","parent":null,"defaultBranchRef":{"name":"%s"}}' "$self" "$FAKE_GH_DEFAULT"
       exit 0
     fi
@@ -123,10 +147,14 @@ origin_repo() {
   git remote get-url origin | sed -E -e 's#^.*[:/]([^/:]+)/([^/]+)$#\1/\2#' -e 's#\.git$##'
 }
 
-# pr_json <number> <draft> <base> <state> <head oid> [repo]: JSON the fake gh prints for `pr view`.
+# pr_json <number> <draft> <base> <state> <head oid> [repo the PR is in] [head owner]:
+# JSON the fake gh prints for `pr view` and `pr list` (the PR's head is the current branch).
 pr_json() {
-  printf '{"number":%s,"url":"https://github.com/%s/pull/%s","title":"T","body":"B","isDraft":%s,"baseRefName":"%s","state":"%s","headRefOid":"%s"}' \
-    "$1" "${6:-$(origin_repo)}" "$1" "$2" "$3" "$4" "$5"
+  local branch owner
+  branch=$(git branch --show-current)
+  owner="${7:-$(origin_repo | cut -d/ -f1)}"
+  printf '{"number":%s,"url":"https://github.com/%s/pull/%s","title":"T","body":"B","isDraft":%s,"baseRefName":"%s","state":"%s","headRefOid":"%s","headRefName":"%s","headRepositoryOwner":{"login":"%s"}}' \
+    "$1" "${6:-$(origin_repo)}" "$1" "$2" "$3" "$4" "$5" "$branch" "$owner"
 }
 
 # run_gather [args]: run gather.sh in the current repo; stdout to $OUT, stderr to $ERR.
@@ -357,8 +385,8 @@ fi
 new_repo
 feature feature/gh
 export FAKE_GH_PR_ERR="error connecting to api.github.com"
-expect_fail "gh pr view error is fatal" "gh pr view failed" --base main
-expect_fail "gh pr view error names the sandbox" "outside the sandbox" --base main
+expect_fail "gh pr list error is fatal" "gh pr list for" --base main
+expect_fail "gh pr list error names the sandbox" "outside the sandbox" --base main
 export FAKE_GH_PR_ERR="Get https://api.github.com: x509: certificate signed by unknown authority"
 expect_fail "gh x509 error is fatal" "x509" --base main
 if grep -qF -- "--no-network" "$ERR"; then bad "gh error message: no --no-network hint" "no hint" "$(cat "$ERR")"; else ok "gh error message: no --no-network hint"; fi
@@ -372,7 +400,8 @@ check "gh: no PR is not a warning" '.warnings | length' 0
 check "gh: no PR gives null" '.pr' null
 check "pr_lookup: none when gh finds no PR" '.pr_lookup' none
 
-export FAKE_GH_PR_JSON='{"number":4,"url":"u","title":"T","body":"B","isDraft":false,"baseRefName":"main","state":"MERGED"}'
+FAKE_GH_PR_JSON=$(pr_json 4 false main MERGED "$(git rev-parse HEAD)")
+export FAKE_GH_PR_JSON
 run_gather --base main
 check "gh: merged PR treated as none" '.pr' null
 check "pr_lookup: none for a merged PR" '.pr_lookup' none
@@ -693,20 +722,44 @@ check "no fork: base remote is origin" '.base_remote' origin
 check "no fork: base repo source is origin" '.base_repo_source' origin
 unset FAKE_GH_DEFAULT
 
-# --- gh resolves to the upstream remote (parent is null): still a guess, still confirmed ------
+# --- gh without --repo resolves to the upstream remote: every lookup must name its repo -----
 new_fork
+sha=$(git rev-parse HEAD)
+FAKE_GH_PR_JSON=$(pr_json 7 false main OPEN "$sha" me/lib me)
+export FAKE_GH_PR_JSON
+run_gather
+check "upstream remote: PR in the fork is found without --repo" '.pr_lookup' found
+check "upstream remote: PR number" '.pr.number' 7
+check "upstream remote: base repo is the fork the PR is in" '.base_repo' me/lib
+check "upstream remote: source is the PR" '.base_repo_source' pull-request
+run_gather --repo me/lib
+check "upstream remote: PR found with --repo me/lib" '.pr.number' 7
+run_gather --repo acme/lib
+check "upstream remote: a PR in the fork is not the PR into acme/lib" '.pr_lookup' none
+check "upstream remote: --repo acme/lib is the argument" '.base_repo_source' argument
+FAKE_GH_PR_JSON=$(pr_json 3 false main OPEN "$sha" acme/lib me)
+export FAKE_GH_PR_JSON
+run_gather
+check "upstream remote: PR from the fork into the parent is found" '.pr.number' 3
+check "upstream remote: its base repo is the parent" '.base_repo' acme/lib
+FAKE_GH_PR_JSON=$(pr_json 4 false main OPEN "$sha" acme/lib someone-else)
+export FAKE_GH_PR_JSON
+run_gather
+check "upstream remote: a PR from another fork with the same branch name is not ours" '.pr_lookup' none
+unset FAKE_GH_PR_JSON
+run_gather
+check "upstream remote: no PR still needs confirmation" '.base_repo_source' needs-confirmation
+check "upstream remote: every gh call names a repository" '[.] | length' 1
+if grep -E '^(pr|repo view|issue)' "$FAKE_GH_LOG" | grep -vE -- '(--repo|-R) |^repo view [A-Za-z0-9._-]+/[A-Za-z0-9._-]+ '; then
+  bad "gh calls: all name their repository" "no gh call without --repo or an explicit repo" "$(cat "$FAKE_GH_LOG")"
+else
+  ok "gh calls: all name their repository"
+fi
+# defensive invariant: if gh names another repository for origin, the target is a guess
 export FAKE_GH_REPO_JSON='{"nameWithOwner":"acme/lib","parent":null,"defaultBranchRef":{"name":"main"}}'
 run_gather
-check "upstream-resolving gh: base repo" '.base_repo' acme/lib
-check "upstream-resolving gh: head repo comes from the origin URL" '.head_repo' me/lib
-check "upstream-resolving gh: needs confirmation" '.base_repo_source' needs-confirmation
-check "upstream-resolving gh: only own commits" '.commit_count' 1
-run_gather --repo acme/lib
-check "upstream-resolving gh with --repo: argument" '.base_repo_source' argument
-export FAKE_GH_SET_DEFAULT=acme/lib
-run_gather
-check "upstream-resolving gh with a default: gh-default" '.base_repo_source' gh-default
-unset FAKE_GH_SET_DEFAULT FAKE_GH_REPO_JSON
+check "gh names another repo for origin: needs confirmation" '.base_repo_source' needs-confirmation
+unset FAKE_GH_REPO_JSON
 
 # --- which repository a fork PR targets: PR, --repo, gh default, then the parent (confirm) ----
 new_fork

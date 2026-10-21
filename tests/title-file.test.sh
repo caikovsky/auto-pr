@@ -83,6 +83,22 @@ if awk '/^ *```/ { inside = !inside; next } inside' "$SKILL" | grep -nE -- "--[a
 else
   PASS=$((PASS + 1)); echo "ok   SKILL.md reads labels and reviewers from files"
 fi
+# gh resolves a repository from the remotes when --repo is missing (a remote named upstream wins
+# over origin), so a command without --repo can act on the wrong repository. Every gh pr and
+# gh issue command in the docs names its repository; gh api paths use <base_repo>, not the
+# {owner}/{repo} placeholders (those use gh's resolution too).
+DOCS=("$SKILL" "$HERE/../skills/autopr/references/"*.md)
+if grep -nE 'gh (pr|issue) (create|edit|ready|view|list|checkout|comment|close|merge|reopen)' "${DOCS[@]}" | grep -v -- '--repo'; then
+  FAIL=$((FAIL + 1)); echo "FAIL a documented gh pr/issue command has no --repo"
+else
+  PASS=$((PASS + 1)); echo "ok   every documented gh pr/issue command names its repository"
+fi
+if grep -nE 'gh api' "${DOCS[@]}" | grep -E '\{owner\}|\{repo\}'; then
+  FAIL=$((FAIL + 1)); echo "FAIL a documented gh api path uses {owner}/{repo}"
+else
+  PASS=$((PASS + 1)); echo "ok   documented gh api paths do not use {owner}/{repo}"
+fi
+
 # A heredoc delimiter that is the same every time can collide with the content.
 if grep -nE 'AUTOPR_EOF([^_]|$)' "$SKILL" "$HERE/../skills/autopr/references/"*.md; then
   FAIL=$((FAIL + 1)); echo "FAIL a fixed AUTOPR_EOF heredoc delimiter is documented"
