@@ -153,7 +153,8 @@ if [[ $BRANCH =~ (^|[^A-Za-z0-9])([A-Za-z]{2,}[A-Za-z0-9]*-[0-9]+)([^.0-9]|$) ]]
   TICKET=$(printf '%s' "${BASH_REMATCH[2]}" | tr '[:lower:]' '[:upper:]')
 fi
 
-# pr_lookup: found (open PR), none (gh answered: no open PR), skipped (gh was not asked).
+# pr_lookup: found (exactly one open PR), none (gh answered: no open PR), ambiguous (open PRs in
+# more than one place: none is chosen, open_prs lists them), skipped (gh was not asked).
 # With "skipped", pr is null because it is unknown, not because it does not exist.
 PR_LOOKUP=skipped
 HAVE_GH=0
@@ -210,6 +211,8 @@ if [ "$HAVE_GH" = 1 ]; then
   HEAD_OWNER="${HEAD_REPO%%/*}"
   FIRST_CANDIDATE=1
   PR_LOOKUP=none
+  : > "$TMP/open-full.ndjson"
+  : > "$TMP/open-list.ndjson"
   for candidate in "${CANDIDATES[@]}"; do
     if GH_PROMPT_DISABLED=1 gh pr list --repo "$candidate" --head "$BRANCH" --state all --limit 50 \
       --json number,url,title,body,isDraft,baseRefName,headRefOid,headRefName,headRepositoryOwner,state \
@@ -217,14 +220,9 @@ if [ "$HAVE_GH" = 1 ]; then
       jq -c --arg b "$BRANCH" --arg o "$(lower "$HEAD_OWNER")" \
         '[.[] | select(.headRefName == $b and ((.headRepositoryOwner.login // "") | ascii_downcase) == $o)]' \
         "$TMP/pr.list" > "$TMP/pr.mine"
-      OPEN_PR=$(jq -c '[.[] | select(.state == "OPEN")] | first // empty' "$TMP/pr.mine")
-      if [ -n "$OPEN_PR" ] && [ "$PR_LOOKUP" = found ]; then
-        warn "another open PR from this branch exists in $candidate: using the first one found"
-      elif [ -n "$OPEN_PR" ]; then
-        printf '%s\n' "$OPEN_PR" | jq -c '{number, url, title, body, isDraft, baseRefName, headRefOid}' > "$TMP/pr.json"
-        PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
-        PR_LOOKUP=found
-      else
+      jq -c '.[] | select(.state == "OPEN") | {number, url, title, body, isDraft, baseRefName, headRefOid}' "$TMP/pr.mine" >> "$TMP/open-full.ndjson"
+      jq -c --arg r "$candidate" '.[] | select(.state == "OPEN") | {number, url, repo: $r, baseRefName}' "$TMP/pr.mine" >> "$TMP/open-list.ndjson"
+      if [ "$(jq -r '[.[] | select(.state == "OPEN")] | length' "$TMP/pr.mine")" = 0 ]; then
         OTHER_STATE=$(jq -r 'first | .state // empty' "$TMP/pr.mine")
         [ -z "$OTHER_STATE" ] || warn "latest PR for this branch in $candidate is $OTHER_STATE: treated as no existing PR"
       fi
@@ -235,6 +233,15 @@ if [ "$HAVE_GH" = 1 ]; then
     fi
     FIRST_CANDIDATE=0
   done
+  OPEN_COUNT=$(wc -l < "$TMP/open-full.ndjson" | tr -d ' ')
+  if [ "$OPEN_COUNT" = 1 ]; then
+    cp "$TMP/open-full.ndjson" "$TMP/pr.json"
+    PR_BASE=$(jq -r .baseRefName "$TMP/pr.json")
+    PR_LOOKUP=found
+  elif [ "$OPEN_COUNT" -gt 1 ]; then
+    PR_LOOKUP=ambiguous
+    warn "$OPEN_COUNT open PRs come from this branch: none is chosen, see open_prs"
+  fi
 fi
 
 # Base repository: the repo the PR targets, with where that answer came from
@@ -489,6 +496,7 @@ else
 fi
 grep -Fxv -- "$TEMPLATE_PATH" "$TMP/templates.list" | lines_json > "$TMP/other-templates.json" || echo '[]' > "$TMP/other-templates.json"
 lines_json < "$TMP/warnings" > "$TMP/warnings.json"
+if [ -s "$TMP/open-list.ndjson" ]; then jq -sc . "$TMP/open-list.ndjson" > "$TMP/open-prs.json"; else echo '[]' > "$TMP/open-prs.json"; fi
 
 jq -n \
   --arg branch "$BRANCH" \
@@ -514,6 +522,7 @@ jq -n \
   --slurpfile other_templates "$TMP/other-templates.json" \
   --slurpfile pr "$TMP/pr.json" \
   --arg pr_lookup "$PR_LOOKUP" \
+  --slurpfile open_prs "$TMP/open-prs.json" \
   --arg base_repo "$BASE_REPO" \
   --arg base_repo_source "$BASE_REPO_SOURCE" \
   --arg head_repo "$HEAD_REPO" \
@@ -553,5 +562,6 @@ jq -n \
     other_templates: $other_templates[0],
     pr: $pr[0],
     pr_lookup: $pr_lookup,
+    open_prs: $open_prs[0],
     warnings: $warnings[0]
   }'
