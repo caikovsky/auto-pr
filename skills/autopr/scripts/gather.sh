@@ -152,7 +152,8 @@ require_safe_name() { # <kind> <name>
 
 # die_git <what> <error file> <remote url>: exit 2 for a failed git network command. An SSH
 # failure (a broken ssh-agent, a missing key) gets its own message with the way past it.
-HTTPS_REWRITE="GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'"
+# One insteadOf key with three values (git config allows several): the scp form and both ssh:// forms.
+HTTPS_REWRITE="GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_1=ssh://git@github.com/ GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_2=ssh://git@github.com:22/ GIT_CONFIG_KEY_3=credential.helper GIT_CONFIG_VALUE_3='!gh auth git-credential'"
 die_git() {
   local what="$1" errfile="$2" url="$3" first
   first=$(head -n 1 "$errfile")

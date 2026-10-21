@@ -1015,7 +1015,21 @@ SSHFAIL_EOF
 chmod +x "$SSHFAIL/git"
 expect_fail_in_path "$SSHFAIL" "ssh failure on the base fetch: names SSH" "SSH" --base main
 expect_fail_in_path "$SSHFAIL" "ssh failure: suggests the ssh-agent" "ssh-agent" --base main
-expect_fail_in_path "$SSHFAIL" "ssh failure: shows the HTTPS rewrite" "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'" --base main
+EXPECTED_REWRITE="GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_1=ssh://git@github.com/ GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_2=ssh://git@github.com:22/ GIT_CONFIG_KEY_3=credential.helper GIT_CONFIG_VALUE_3='!gh auth git-credential'"
+expect_fail_in_path "$SSHFAIL" "ssh failure: shows the HTTPS rewrite" "$EXPECTED_REWRITE" --base main
+# The printed environment must really rewrite every SSH URL form to HTTPS. `git ls-remote
+# --get-url` prints the URL after insteadOf is applied, so no network is needed.
+rewrite=$(sed -n 's/.*this command only (no git config is edited): //p' "$ERR" | head -n 1)
+expect "the printed rewrite is the expected one" "$EXPECTED_REWRITE" "$rewrite"
+for url in git@github.com:acme/lib.git ssh://git@github.com/acme/lib.git ssh://git@github.com:22/acme/lib.git; do
+  git remote set-url origin "$url"
+  got=$(eval "env $rewrite git ls-remote --get-url origin")
+  expect "the printed rewrite turns $url into https" https://github.com/acme/lib.git "$got"
+done
+git remote set-url origin "$DIR/origin.git"
+git remote set-url origin git@github.com:acme/lib.git
+expect "without the rewrite the same URL stays SSH" git@github.com:acme/lib.git "$(git ls-remote --get-url origin)"
+git remote set-url origin "$DIR/origin.git"
 expect_fail_in_path "$SSHFAIL" "ssh failure: says it is per command, not a config edit" "this command only" --base main
 FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names SSH" "SSH" --base main
 FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names ls-remote" "ls-remote" --base main

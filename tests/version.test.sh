@@ -8,7 +8,34 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 
-SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+# valid_semver <version>: SemVer 2.0.0. Each dot-separated pre-release identifier is non-empty,
+# uses [0-9A-Za-z-] and, when purely numeric, has no leading zero; each build identifier is
+# non-empty and uses [0-9A-Za-z-] (leading zeros are allowed there). Works in bash 3.2.
+valid_semver() {
+  local v="$1" core pre="" build="" has_pre=0 has_build=0 id ids
+  case "$v" in *+*) has_build=1; build="${v#*+}"; v="${v%%+*}" ;; esac
+  case "$v" in *-*) has_pre=1; pre="${v#*-}"; v="${v%%-*}" ;; esac
+  core="$v"
+  [[ $core =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
+  if [ "$has_pre" = 1 ]; then
+    [ -n "$pre" ] || return 1
+    case "$pre" in .* | *. | *..*) return 1 ;; esac
+    ids=$(printf '%s' "$pre" | tr '.' ' ')
+    for id in $ids; do
+      [[ $id =~ ^[0-9A-Za-z-]+$ ]] || return 1
+      if [[ $id =~ ^[0-9]+$ ]] && [[ $id =~ ^0[0-9] ]]; then return 1; fi
+    done
+  fi
+  if [ "$has_build" = 1 ]; then
+    [ -n "$build" ] || return 1
+    case "$build" in .* | *. | *..*) return 1 ;; esac
+    ids=$(printf '%s' "$build" | tr '.' ' ')
+    for id in $ids; do
+      [[ $id =~ ^[0-9A-Za-z-]+$ ]] || return 1
+    done
+  fi
+  return 0
+}
 
 PASS=0
 FAIL=0
@@ -34,7 +61,7 @@ problems() {
   [ -n "$changelog" ] || echo "CHANGELOG.md has no version heading"
   [ "$plugin" = "$skill" ] || echo "plugin.json ($plugin) and SKILL.md ($skill) differ"
   [ "$plugin" = "$changelog" ] || echo "plugin.json ($plugin) and the newest CHANGELOG.md heading ($changelog) differ"
-  if [ -n "$plugin" ] && ! [[ $plugin =~ $SEMVER ]]; then echo "version '$plugin' is not valid SemVer"; fi
+  if [ -n "$plugin" ] && ! valid_semver "$plugin"; then echo "version '$plugin' is not valid SemVer"; fi
   if [ -f "$root/.claude-plugin/marketplace.json" ]; then
     jq -r '.plugins[]? | select(.version != null) | "\(.name) \(.version)"' "$root/.claude-plugin/marketplace.json" | while read -r name v; do
       [ "$v" = "$plugin" ] || echo "marketplace.json lists $name $v, not $plugin"
@@ -90,6 +117,17 @@ expect_ok "a pre-release version is SemVer" "$WORK/prerelease"
 fixture "$WORK/market" 1.2.3 1.2.3 1.2.3
 printf '{"plugins":[{"name":"autopr","version":"1.2.0"}]}\n' > "$WORK/market/.claude-plugin/marketplace.json"
 expect_problem "a marketplace version that differs fails" "$WORK/market" "marketplace.json lists autopr 1.2.0"
+
+# SemVer identifiers: no empty ones, no leading zeros in numeric pre-release identifiers, build
+# identifiers use letters, digits and hyphens only (leading zeros are allowed there).
+for bad in 1.2.3-01 1.2.3-rc..1 1.2.3+build..1 1.2.3- 1.2.3+ 1.2.3-rc. 1.2.3-.rc 1.2.3-rc_1 1.2.3+b_1 1.2.3-1.02 1.2.3-rc+ 1.2.3+a+b; do
+  fixture "$WORK/bad-$bad" "$bad" "$bad" "$bad"
+  expect_problem "invalid SemVer $bad is rejected" "$WORK/bad-$bad" "not valid SemVer"
+done
+for good in 1.2.3-rc.1 1.2.3-0.3.7 1.2.3+001 1.2.3-alpha-1+build.5 1.2.3-0 1.2.3-a.0.b 1.2.3-1a 1.2.3-x.7.z.92 1.2.3+20130313144700 1.2.3-beta+exp.sha.5114f85; do
+  fixture "$WORK/good-$good" "$good" "$good" "$good"
+  expect_ok "valid SemVer $good is accepted" "$WORK/good-$good"
+done
 
 # --- this repository ---
 expect_ok "this repository's versions agree and are SemVer" "$REPO"
