@@ -86,10 +86,10 @@ Write the title and body yourself; call no other AI tool.
 
 **Title:**
 - New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title. Write the result to `<work-dir>/title.txt` with your file-writing tool.
-- New PR without a ticket: use the first rule that applies.
+- New PR without a ticket: use the first rule that applies. The title has at most 72 characters: when the text a rule gives is longer, write an imperative summary of the commits that fits instead.
   1. `linked_issues` is not empty: the title of the first issue: `gh issue view <N> --repo '<base_repo>' --json title --jq .title > <work-dir>/title.txt` (outside the sandbox). If the call fails, warn once and go on.
   2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`), written to `<work-dir>/title.txt` with your file-writing tool.
-  3. Write a short summary of the commits to `<work-dir>/title.txt`: imperative mood, at most 72 characters.
+  3. Write a short summary of the commits to `<work-dir>/title.txt`: imperative mood.
   4. Only if the commits say nothing useful (for example `wip`): derive it from the branch name (`/` to `: `, `-` to a space, title case) and write it to `<work-dir>/title.txt`.
 - Existing PR: keep `pr.title`. Change it only when a verified ticket exists and `pr.title` does not already start with `[KEY]`.
 
@@ -133,7 +133,7 @@ gh pr create --repo '<base_repo>' --head '<branch>' --base '<base>' --title "$(c
 gh pr edit <number> --repo '<base_repo>' --add-reviewer @copilot
 ```
 
-`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. Exit code 0 means the request succeeded. Do not re-check it: `reviewRequests` can stay empty for a bot reviewer. Only on a non-zero exit (Copilot review may be off for the repo), warn once and continue. Take `<number>` from the URL that the create command prints.
+`--head` stops `gh` from pushing or offering a fork. The Copilot request runs only on create. Exit code 0 means the request succeeded. Do not re-check it: `reviewRequests` can stay empty for a bot reviewer. On a non-zero exit, read the error. When it looks transient (a TLS handshake timeout, a timeout, EOF, a connection reset or an HTTP 5xx), run the same command once more. Do not retry on not found, permission or validation errors (Copilot review may be off for the repo). If the command still fails, warn once and continue. Take `<number>` from the URL that the create command prints.
 
 **`pr` exists (update):**
 
@@ -174,6 +174,7 @@ Remove the work directory files (`rm -f <work-dir>/*.txt <work-dir>/body.md <wor
 |-------|--------|
 | Not in a git repo | Stop: "Not in a git repository." |
 | `gather.sh` exits 2 | Show its message (no `origin`, detached HEAD, `gh` or fetch failure in any repository, too many PRs for the branch name, no merge base, unknown base). Stop. |
+| `gather.sh` names SSH | The git fetch or ls-remote failed over SSH (a broken ssh-agent, a missing key). Show the message, which names the fix: check the ssh-agent, or run `gather.sh` again with the HTTPS rewrite (environment variables, for that command only) it prints. Never edit git config. |
 | No commits ahead | Stop: "No commits between base and head." |
 | Branch not pushed | Stop with the push command (see section 2). |
 | `gh` missing or logged out | Stop with the install or login command. |

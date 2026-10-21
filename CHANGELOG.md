@@ -7,6 +7,9 @@ Fixes from the second Copilot review of #8, after it merged.
 - `gather.sh` lists open PRs with `gh pr list --state open --limit 100` and stops (exit 2, "pass `--pr`") when a full page comes back, instead of treating a cut list as complete. Before, `--state all --limit 50` could hide an older open PR behind newer closed PRs or PRs from other forks with the same branch name. `--pr <number>` reads the PR with `gh pr view`, so the cap cannot reject it.
 - A failed PR lookup in any candidate repository (not only the first) exits 2. Before, a failed second lookup was a warning, so a PR in the parent could go unseen.
 - After a transfer or rename of the origin repository, the owner used to match PRs comes from GitHub's canonical name (`gh repo view <origin repo>`), not from the old URL. A warning names the difference.
+- A generated PR title has at most 72 characters: a single commit subject or an issue title that is longer is replaced by an imperative summary. A verified Jira title is not capped.
+- The Copilot reviewer request is retried once when the error looks transient (TLS or other timeout, EOF, connection reset, HTTP 5xx), and never on not-found or permission errors. Before, a TLS timeout was reported like a disabled Copilot review.
+- A git fetch or ls-remote that fails over SSH (a broken ssh-agent, a missing key, "Permission denied (publickey)") now says so, and prints the HTTPS rewrite (environment variables for one command, no git config edit) as the way past it. SKILL.md has an error-table row for it.
 - The fork base is fetched into a ref private to the run (`refs/autopr/base-<pid>-<n>`), its commit id is pinned for the merge base, log and diff, and the ref is deleted on exit, so parallel runs in one checkout cannot overwrite each other's base.
 
 ## 1.5.0

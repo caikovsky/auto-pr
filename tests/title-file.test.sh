@@ -117,6 +117,26 @@ for opt in '--base <branch>' '--repo <owner/name>' '--pr <number>'; do
   fi
 done
 
+# The 72-character cap on a generated title is stated once, for every rule but a verified Jira title.
+cap_mentions=$(grep -c '72 characters' "$SKILL" || true)
+if [ "$cap_mentions" = 1 ]; then
+  PASS=$((PASS + 1)); echo "ok   the 72-character title cap is stated once"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL the 72-character cap is mentioned $cap_mentions times in SKILL.md (expected once)"
+fi
+# The Copilot request retries once on a transient error, never on not-found or permission errors.
+if grep -qiE 'transient' "$SKILL" && grep -qiE 'not found|permission' "$SKILL"; then
+  PASS=$((PASS + 1)); echo "ok   SKILL.md documents the transient-error retry"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL SKILL.md does not document the transient-error retry"
+fi
+# The error table has a row for SSH failures.
+if grep -E '^\|.*SSH' "$SKILL" | grep -q 'HTTPS'; then
+  PASS=$((PASS + 1)); echo "ok   the error table has an SSH row"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL the error table has no SSH row"
+fi
+
 # A heredoc delimiter that is the same every time can collide with the content.
 if grep -nE 'AUTOPR_EOF([^_]|$)' "$SKILL" "$HERE/../skills/autopr/references/"*.md; then
   FAIL=$((FAIL + 1)); echo "FAIL a fixed AUTOPR_EOF heredoc delimiter is documented"

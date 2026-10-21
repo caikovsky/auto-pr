@@ -171,6 +171,13 @@ run_gather_in_path() {
   run_gather "$@"
 }
 
+# expect_fail_in_path <dir> <name> <needle> [args]: expect_fail with <dir> first on PATH.
+expect_fail_in_path() {
+  local PATH="$1:$PATH"
+  shift
+  expect_fail "$@"
+}
+
 # expect <name> <expected> <actual>
 expect() {
   if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "$2" "$3"; fi
@@ -980,6 +987,36 @@ refs=$(grep -o ':refs/autopr/[A-Za-z0-9_-]*' "$WORK/git-calls.log" | sort -u)
 expect "private base ref: two runs used two different refs" 2 "$(printf '%s\n' "$refs" | grep -c .)"
 if printf '%s\n' "$refs" | grep -qx ':refs/autopr/base'; then bad "private base ref: no shared name" "no refs/autopr/base" "$refs"; else ok "private base ref: no shared name"; fi
 expect "private base ref: nothing is left after the runs" "" "$(git for-each-ref refs/autopr)"
+
+# --- SSH failures say so, and say how to get past them --------------------------------------
+new_repo
+feature feature/sshfail
+SSHFAIL="$WORK/sshfail-bin"
+mkdir -p "$SSHFAIL"
+cat > "$SSHFAIL/git" << SSHFAIL_EOF
+#!/usr/bin/env bash
+# Fails fetch (or ls-remote, when FAKE_SSH_FAIL=ls-remote) like a broken ssh-agent does.
+cmd="\$1"
+if [ "\$cmd" = "-c" ]; then cmd="\$3"; fi
+if [ "\$cmd" = "\${FAKE_SSH_FAIL:-fetch}" ]; then
+  echo 'sign_and_send_pubkey: signing failed for RSA "/home/u/.ssh/id_rsa" from agent: communication with agent failed' >&2
+  echo 'git@github.com: Permission denied (publickey).' >&2
+  echo 'fatal: Could not read from remote repository.' >&2
+  exit 128
+fi
+exec "$(command -v git)" "\$@"
+SSHFAIL_EOF
+chmod +x "$SSHFAIL/git"
+expect_fail_in_path "$SSHFAIL" "ssh failure on the base fetch: names SSH" "SSH" --base main
+expect_fail_in_path "$SSHFAIL" "ssh failure: suggests the ssh-agent" "ssh-agent" --base main
+expect_fail_in_path "$SSHFAIL" "ssh failure: shows the HTTPS rewrite" "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'" --base main
+expect_fail_in_path "$SSHFAIL" "ssh failure: says it is per command, not a config edit" "this command only" --base main
+FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names SSH" "SSH" --base main
+FAKE_SSH_FAIL=ls-remote expect_fail_in_path "$SSHFAIL" "ssh failure on the head check: names ls-remote" "ls-remote" --base main
+# a dead local remote is not an SSH problem
+git remote set-url origin "$DIR/missing.git"
+expect_fail "a dead local remote does not mention SSH" "git fetch origin main failed" --base main
+if grep -q "SSH" "$ERR"; then bad "a dead local remote: no SSH hint" "no SSH hint" "$(cat "$ERR")"; else ok "a dead local remote: no SSH hint"; fi
 
 # --- the same PR number in the fork and the parent: --pr needs --repo -----------------------
 new_fork

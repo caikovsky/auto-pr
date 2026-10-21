@@ -150,6 +150,19 @@ require_safe_name() { # <kind> <name>
   esac
 }
 
+# die_git <what> <error file> <remote url>: exit 2 for a failed git network command. An SSH
+# failure (a broken ssh-agent, a missing key) gets its own message with the way past it.
+HTTPS_REWRITE="GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG_VALUE_0=git@github.com: GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'"
+die_git() {
+  local what="$1" errfile="$2" url="$3" first
+  first=$(head -n 1 "$errfile")
+  if grep -qE 'Permission denied \(publickey|signing failed|Host key verification failed|ssh: ' "$errfile" \
+    || { grep -q 'Could not read from remote repository' "$errfile" && [[ $url =~ ^(ssh://|[A-Za-z0-9._-]+@[^/:]+:) ]]; }; then
+    die "$what failed over SSH: $first. Check the ssh-agent (ssh-add -l) and the key's access to GitHub, or run this with an HTTPS rewrite set through the environment for this command only (no git config is edited): $HTTPS_REWRITE"
+  fi
+  die "$what failed: $first. Run this outside the sandbox and check the network and the remote."
+}
+
 BRANCH=$(git branch --show-current)
 [ -n "$BRANCH" ] || die "detached HEAD: check out the branch first"
 require_safe_name branch "$BRANCH"
@@ -430,11 +443,11 @@ if [ "$NO_NETWORK" != 1 ] && [ -n "$BASE_REPO" ] && [ -n "$HEAD_REPO" ] && [ "$(
   fi
   PRIVATE_REF="refs/autopr/base-$$-$RANDOM"
   git fetch --quiet "$FETCH_FROM" "+refs/heads/$BASE:$PRIVATE_REF" 2> "$TMP/fetch.err" \
-    || die "git fetch $FETCH_FROM $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
+    || die_git "git fetch $FETCH_FROM $BASE" "$TMP/fetch.err" "$FETCH_FROM"
   BASE_REF="$PRIVATE_REF"
 elif [ "$NO_NETWORK" != 1 ]; then
   git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2> "$TMP/fetch.err" \
-    || die "git fetch origin $BASE failed: $(head -n 1 "$TMP/fetch.err"). Run this outside the sandbox and check the network and the remote."
+    || die_git "git fetch origin $BASE" "$TMP/fetch.err" "$ORIGIN_URL"
 fi
 git rev-parse --verify --quiet "$BASE_REF^{commit}" > /dev/null \
   || die "$BASE_REF not found: fetch it or pass a different --base"
@@ -503,7 +516,7 @@ if [ "$NO_NETWORK" != 1 ]; then
   if git ls-remote --heads origin "refs/heads/$BRANCH" > "$TMP/ls-remote.txt" 2> "$TMP/ls-remote.err"; then
     BRANCH_ON_REMOTE=$(awk -F'\t' -v ref="refs/heads/$BRANCH" '$2 == ref { found = 1 } END { print found + 0 }' "$TMP/ls-remote.txt")
   else
-    die "git ls-remote origin failed: $(head -n 1 "$TMP/ls-remote.err"). Run this outside the sandbox and check the network and the remote."
+    die_git "git ls-remote origin" "$TMP/ls-remote.err" "$ORIGIN_URL"
   fi
   if [ "$BRANCH_ON_REMOTE" = 0 ]; then
     HEAD_STATUS="remote-missing"
@@ -524,7 +537,7 @@ if [ "$NO_NETWORK" != 1 ]; then
       HEAD_STATUS="diverged"
     fi
   else
-    die "git fetch origin $BRANCH failed: $(head -n 1 "$TMP/fetch-head.err"). Run this outside the sandbox and check the network and the remote."
+    die_git "git fetch origin $BRANCH" "$TMP/fetch-head.err" "$ORIGIN_URL"
   fi
 fi
 
