@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.6.1
 
-Fixes from the second Copilot review of #8, after it merged.
+Fixes from the second Copilot review of #8, after it merged, and fixes from the first end-to-end run of the skill. No new arguments.
 
 - `gather.sh` lists open PRs with `gh pr list --state open --limit 100` and stops (exit 2, "pass `--pr`") when a full page comes back, instead of treating a cut list as complete. Before, `--state all --limit 50` could hide an older open PR behind newer closed PRs or PRs from other forks with the same branch name. `--pr <number>` reads the PR with `gh pr view`, so the cap cannot reject it.
 - A failed PR lookup in any candidate repository (not only the first) exits 2. Before, a failed second lookup was a warning, so a PR in the parent could go unseen.
@@ -12,6 +12,7 @@ Fixes from the second Copilot review of #8, after it merged.
 - A git fetch or ls-remote that fails over SSH (a broken ssh-agent, a missing key, "Permission denied (publickey)") now says so, and prints the HTTPS rewrite (environment variables for one command, no git config edit) as the way past it. SKILL.md has an error-table row for it.
 - A stale extra remote (it points at a repository GitHub cannot find or you cannot see) no longer stops every run: it is skipped with a warning naming the remote and the fix (`git remote remove <name>` or a corrected URL). Any other failure for such a remote (network, auth, rate limit) still exits 2, and the message names the remote. Failures for origin's repository, its parent and `--repo` stay fatal.
 - The fork base is fetched into a ref private to the run (`refs/autopr/base-<pid>-<n>`), its commit id is pinned for the merge base, log and diff, and the ref is deleted on exit, so parallel runs in one checkout cannot overwrite each other's base.
+- `tests/version.test.sh` checks that `plugin.json`, the SKILL.md `metadata.version` and the newest `CHANGELOG.md` version heading agree and are valid SemVer, so a release cannot go out with the versions apart. It runs in both CI jobs.
 
 ## 1.6.0
 

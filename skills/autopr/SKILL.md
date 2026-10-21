@@ -3,7 +3,7 @@ name: autopr
 description: Creates or updates the GitHub pull request for the current branch. Gathers git context against the up-to-date base branch, reads the Jira ticket named in the branch via acli, fills the repo's PR template, and runs gh. Use when the user says "autopr", "create pr", "open pr", "make pr", "push and open PR", "ship it", "update the pr" or "pr description". Does not review, summarize or comment on existing PRs. Never pushes or commits; it stops if the branch is not pushed.
 license: MIT
 metadata:
-  version: "1.6.0"
+  version: "1.6.1"
 ---
 
 # AutoPR
