@@ -20,6 +20,7 @@ jobs:
       - name: Script tests
         run: |
           bash tests/gather.test.sh
+          bash tests/clean-title.test.sh
           bash tests/title-file.test.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -48,4 +49,5 @@ jobs:
       - name: Script tests under /bin/bash
         run: |
           /bin/bash tests/gather.test.sh
+          /bin/bash tests/clean-title.test.sh
           /bin/bash tests/title-file.test.sh

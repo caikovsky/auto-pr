@@ -3,7 +3,7 @@ name: autopr
 description: Creates or updates the GitHub pull request for the current branch. Gathers git context against the up-to-date base branch, reads the Jira ticket named in the branch via acli, fills the repo's PR template, and runs gh. Use when the user says "autopr", "create pr", "open pr", "make pr", "push and open PR", "ship it", "update the pr" or "pr description". Does not review, summarize or comment on existing PRs. Never pushes or commits; it stops if the branch is not pushed.
 license: MIT
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
 ---
 
 # AutoPR
@@ -85,7 +85,10 @@ When `acli` is missing, or the call fails or finds no item, there is no ticket: 
 Write the title and body yourself; call no other AI tool.
 
 **Title:**
-- New PR with a verified ticket: `[KEY] - Clean Ticket Title`. Remove bracketed tags such as `[AN]` or `[SPIKE]` from the ticket title. Write the result to `<work-dir>/title.txt` with your file-writing tool.
+- New PR with a verified ticket: `[KEY] - <clean title>`. `scripts/clean-title.sh` removes bracketed tags such as `[AN]`, `[Android]`, `[SPIKE]` and `[PoC]`; feed it the summary on stdin, never as text in the command:
+  ```bash
+  jq -r .fields.summary <work-dir>/jira.json | scripts/clean-title.sh | { printf '[<KEY>] - '; cat; } > <work-dir>/title.txt
+  ```
 - New PR without a ticket: use the first rule that applies.
   1. `linked_issues` is not empty: the title of the first issue: `gh issue view <N> --repo '<base_repo>' --json title --jq .title > <work-dir>/title.txt` (outside the sandbox). If the call fails, warn once and go on.
   2. `commit_count` is 1: that commit's subject (the text after the hash in `commits[0]`), written to `<work-dir>/title.txt` with your file-writing tool.

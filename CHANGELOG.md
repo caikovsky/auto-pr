@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0
+
+- PR titles drop bracketed tags from the Jira summary (`[AN]`, `[Android]`, `[iOS]`, `[SPIKE]`, `[PoC]`, in any position). `scripts/clean-title.sh` does it; the rules come from the former Python CLI (issue #5, CLI change #7). A summary that is only tags keeps its original text.
+- The summary reaches `clean-title.sh` on stdin (`jq -r .fields.summary <file> | scripts/clean-title.sh`), never as text in a command line, so `$0` and backticks in a Jira summary stay literal. Tests feed such a summary through the documented pipeline.
+
 ## 1.5.0
 
 Fixes from a review of the skill. Behavior changes are marked **breaking**.
