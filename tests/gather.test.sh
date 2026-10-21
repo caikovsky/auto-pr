@@ -46,18 +46,13 @@ resolved="${arg_repo:-$resolved}"
 case "$1 $2" in
   "pr view" | "pr list")
     if [ -n "${FAKE_GH_PR_ERR:-}" ]; then echo "$FAKE_GH_PR_ERR" >&2; exit 1; fi
-    # The fake PR lives in the repository named by its URL; it is found only there.
-    pr_repo=""
-    if [ -n "${FAKE_GH_PR_JSON:-}" ]; then pr_repo=$(jq -r .url <<< "$FAKE_GH_PR_JSON" | sed -E 's#^https?://[^/]+/([^/]+/[^/]+)/pull/.*#\1#'); fi
-    if [ "$1 $2" = "pr list" ]; then
-      if [ "$pr_repo" = "$resolved" ] && [ "$(jq -r .headRefName <<< "$FAKE_GH_PR_JSON")" = "$head_arg" ]; then
-        printf '[%s]' "$FAKE_GH_PR_JSON"
-      else
-        printf '[]'
-      fi
-      exit 0
-    fi
-    if [ "$pr_repo" = "$resolved" ]; then printf '%s' "$FAKE_GH_PR_JSON"; exit 0; fi
+    # Fake PRs (FAKE_GH_PRS, a JSON array, or the single FAKE_GH_PR_JSON) live in the repository
+    # named by their URL and are found only there.
+    if [ -n "${FAKE_GH_PRS:-}" ]; then prs="$FAKE_GH_PRS"; elif [ -n "${FAKE_GH_PR_JSON:-}" ]; then prs="[$FAKE_GH_PR_JSON]"; else prs="[]"; fi
+    here=$(jq -c --arg r "$resolved" --arg h "$head_arg" \
+      '[.[] | select((.url | sub("^https?://[^/]+/"; "") | sub("/pull/.*$"; "")) == $r and (($h == "") or .headRefName == $h))]' <<< "$prs")
+    if [ "$1 $2" = "pr list" ]; then printf '%s' "$here"; exit 0; fi
+    if [ "$(jq length <<< "$here")" -gt 0 ]; then jq -c '.[0]' <<< "$here"; exit 0; fi
     echo 'no pull requests found for branch "x"' >&2
     exit 1
     ;;
@@ -130,7 +125,7 @@ new_repo() {
   git push -q -u origin main
   git remote set-head origin main
   : > "$FAKE_GH_LOG"
-  unset FAKE_GH_PR_JSON FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
+  unset FAKE_GH_PR_JSON FAKE_GH_PRS FAKE_GH_PR_ERR FAKE_GH_DEFAULT FAKE_GH_REPO_JSON FAKE_GH_PARENT_JSON FAKE_GH_SET_DEFAULT
 }
 
 # feature <branch>: create the branch, commit one file, push it with upstream.
@@ -760,6 +755,40 @@ export FAKE_GH_REPO_JSON='{"nameWithOwner":"acme/lib","parent":null,"defaultBran
 run_gather
 check "gh names another repo for origin: needs confirmation" '.base_repo_source' needs-confirmation
 unset FAKE_GH_REPO_JSON
+
+# --- open PRs in both the fork and the parent: ask, never pick one --------------------------
+new_fork
+sha=$(git rev-parse HEAD)
+fork_pr=$(pr_json 7 false main OPEN "$sha" me/lib me)
+parent_pr=$(pr_json 42 false main OPEN "$sha" acme/lib me)
+export FAKE_GH_PRS="[$fork_pr,$parent_pr]"
+run_gather
+check "two open PRs: ambiguous" '.pr_lookup' ambiguous
+check "two open PRs: no pr is chosen" '.pr' null
+check "two open PRs: both listed" '.open_prs | map(.number) | sort | join(",")' "7,42"
+check "two open PRs: each names its repo" '.open_prs | map(.repo) | sort | join(",")' "acme/lib,me/lib"
+check "two open PRs: base branch listed" '.open_prs | map(.baseRefName) | unique | join(",")' main
+check "two open PRs: url listed" '.open_prs | map(.url | startswith("https://github.com/")) | all' true
+run_gather --repo acme/lib
+check "--repo parent narrows to the parent PR" '.pr_lookup' found
+check "--repo parent: number" '.pr.number' 42
+check "--repo parent: only one is listed" '.open_prs | length' 1
+run_gather --repo me/lib
+check "--repo fork narrows to the fork PR" '.pr.number' 7
+parent_merged=$(pr_json 42 false main MERGED "$sha" acme/lib me)
+export FAKE_GH_PRS="[$fork_pr,$parent_merged]"
+run_gather
+check "one open and one merged PR: found" '.pr_lookup' found
+check "one open and one merged PR: the open one" '.pr.number' 7
+check "one open and one merged PR: only the open one is listed" '.open_prs | length' 1
+check "one open and one merged PR: merged one warned" '.warnings | map(select(contains("MERGED"))) | length' 1
+export FAKE_GH_PRS='[]'
+run_gather
+check "no open PR: none" '.pr_lookup' none
+check "no open PR: empty list" '.open_prs | length' 0
+run_gather --no-network
+check "no network: skipped and no list" '.open_prs | length' 0
+unset FAKE_GH_PRS
 
 # --- which repository a fork PR targets: PR, --repo, gh default, then the parent (confirm) ----
 new_fork
