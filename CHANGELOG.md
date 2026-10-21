@@ -13,6 +13,11 @@ Fixes from the second Copilot review of #8, after it merged.
 - A stale extra remote (it points at a repository GitHub cannot find or you cannot see) no longer stops every run: it is skipped with a warning naming the remote and the fix (`git remote remove <name>` or a corrected URL). Any other failure for such a remote (network, auth, rate limit) still exits 2, and the message names the remote. Failures for origin's repository, its parent and `--repo` stay fatal.
 - The fork base is fetched into a ref private to the run (`refs/autopr/base-<pid>-<n>`), its commit id is pinned for the merge base, log and diff, and the ref is deleted on exit, so parallel runs in one checkout cannot overwrite each other's base.
 
+## 1.6.0
+
+- PR titles drop bracketed tags from the Jira summary (`[AN]`, `[Android]`, `[iOS]`, `[SPIKE]`, `[PoC]`, in any position). `scripts/clean-title.sh` does it; the rules come from the former Python CLI (issue #5, CLI change #7). A summary that is only tags keeps its original text.
+- The summary reaches `clean-title.sh` on stdin (`jq -r .fields.summary <file> | scripts/clean-title.sh`), never as text in a command line, so `$0` and backticks in a Jira summary stay literal. Tests feed such a summary through the documented pipeline.
+
 ## 1.5.0
 
 Fixes from a review of the skill. Behavior changes are marked **breaking**.
